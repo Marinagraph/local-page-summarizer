@@ -93,6 +93,22 @@ label {
   font-size: 12px;
 }
 
+label.option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+label.option input {
+  width: auto;
+  min-height: auto;
+}
+
+label.wide {
+  grid-column: 1 / -1;
+}
+
 input {
   box-sizing: border-box;
   width: 100%;

@@ -29,6 +29,14 @@
           Max chars
           <input id="maxCharsInput" type="number" min="1000" max="200000" step="1000" value="24000">
         </label>
+        <label class="option">
+          <input id="ocrEnabledInput" type="checkbox">
+          OCR images
+        </label>
+        <label class="wide">
+          OCR endpoint
+          <input id="ocrEndpointInput" type="text" value="http://127.0.0.1:2010/ocr" spellcheck="false">
+        </label>
       </section>
 
       <section id="pageMeta" class="meta" hidden></section>

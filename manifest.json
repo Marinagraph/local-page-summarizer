@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Local Page Summarizer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Save the current page and summarize it with LM Studio running locally.",
   "permissions": [
     "activeTab",
@@ -12,7 +12,9 @@
   "host_permissions": [
     "<all_urls>",
     "http://127.0.0.1:2000/*",
-    "http://localhost:2000/*"
+    "http://localhost:2000/*",
+    "http://127.0.0.1:2010/*",
+    "http://localhost:2010/*"
   ],
   "action": {
     "default_title": "Save and summarize",

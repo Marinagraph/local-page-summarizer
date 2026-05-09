@@ -42,6 +42,45 @@ function collectLikelyComments() {
   return comments;
 }
 
+function collectImageCandidates() {
+  const seen = new Set();
+  const images = [];
+
+  for (const image of document.querySelectorAll("img")) {
+    const src = image.currentSrc || image.src || image.getAttribute("data-src") || "";
+    const width = image.naturalWidth || image.width || 0;
+    const height = image.naturalHeight || image.height || 0;
+    const lowerSrc = src.toLowerCase();
+
+    if (!src || seen.has(src)) {
+      continue;
+    }
+    if (width < 300 || height < 180) {
+      continue;
+    }
+    if (lowerSrc.includes("logo") || lowerSrc.includes("avatar") || lowerSrc.includes("profile") || lowerSrc.includes("emoji")) {
+      continue;
+    }
+    if (lowerSrc.endsWith(".svg") || lowerSrc.startsWith("blob:")) {
+      continue;
+    }
+
+    seen.add(src);
+    images.push({
+      url: src,
+      alt: image.alt || "",
+      width,
+      height
+    });
+
+    if (images.length >= 8) {
+      break;
+    }
+  }
+
+  return images;
+}
+
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const main = document.querySelector("main, article, [role='main']");
@@ -54,6 +93,7 @@ function collectPage() {
     description: getMetaDescription(),
     text,
     comments: collectLikelyComments(),
+    images: collectImageCandidates(),
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };

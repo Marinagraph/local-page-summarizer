@@ -1,9 +1,12 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
+const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
 const collectButton = document.querySelector("#collectButton");
 const exportButton = document.querySelector("#exportButton");
 const modelInput = document.querySelector("#modelInput");
 const maxCharsInput = document.querySelector("#maxCharsInput");
+const ocrEnabledInput = document.querySelector("#ocrEnabledInput");
+const ocrEndpointInput = document.querySelector("#ocrEndpointInput");
 const statusElement = document.querySelector("#status");
 const summaryElement = document.querySelector("#summary");
 const pageMetaElement = document.querySelector("#pageMeta");
@@ -27,6 +30,14 @@ function compactForPrompt(page, maxChars) {
   const comments = page.comments && page.comments.length
     ? `\n\n[댓글 후보]\n${page.comments.map((comment, index) => `${index + 1}. ${comment}`).join("\n\n")}`
     : "";
+  const ocrText = page.ocrResults && page.ocrResults.length
+    ? `\n\n[이미지 OCR 텍스트]\n${page.ocrResults.map((result) => [
+      `이미지 ${result.index}: ${result.width}x${result.height}`,
+      result.alt ? `ALT: ${result.alt}` : "",
+      `URL: ${result.url}`,
+      result.text ? result.text : result.error ? `OCR 오류: ${result.error}` : "OCR 텍스트 없음"
+    ].filter(Boolean).join("\n")).join("\n\n")}`
+    : "";
 
   const body = [
     `제목: ${page.title}`,
@@ -35,7 +46,8 @@ function compactForPrompt(page, maxChars) {
     page.selectedOnly ? "수집 범위: 사용자가 선택한 텍스트" : "수집 범위: 페이지 본문",
     "",
     page.text,
-    comments
+    comments,
+    ocrText
   ].filter(Boolean).join("\n");
 
   return body.slice(0, maxChars);
@@ -77,7 +89,8 @@ async function summarizeWithLMStudio(page) {
             "너는 한국어 개인 리서치 보조자다.",
             "주어진 웹페이지 내용을 사실 중심으로 정리한다.",
             "광고, 메뉴, 중복 문구는 무시하고 페이지의 주장과 근거를 우선한다.",
-            "댓글 후보가 있으면 사용자 반응으로 따로 정리한다."
+            "댓글 후보가 있으면 사용자 반응으로 따로 정리한다.",
+            "이미지 OCR 텍스트가 있으면 캡처 기사나 이미지 본문일 수 있으므로 함께 분석하되, OCR 오류 가능성이 있는 내용은 단정하지 않는다."
           ].join(" ")
         },
         {
@@ -92,8 +105,11 @@ async function summarizeWithLMStudio(page) {
             "5. 눈여겨볼 댓글",
             "   - 참고할 만한 댓글이 있으면 원문에서 핵심 문장만 짧게 인용하고, 왜 중요한지 한 줄로 설명",
             "   - 댓글 후보가 없거나 의미 있는 댓글이 없으면 '특별히 인용할 댓글 없음'이라고 작성",
-            "6. 구매 또는 판단 시 주의점",
-            "7. 출처에서 확인해야 할 부분",
+            "6. 이미지 OCR에서 확인된 내용",
+            "   - 이미지 OCR 텍스트가 있으면 본문과 다른 핵심 내용만 정리",
+            "   - OCR 텍스트가 없으면 '이미지 OCR 내용 없음'이라고 작성",
+            "7. 구매 또는 판단 시 주의점",
+            "8. 출처에서 확인해야 할 부분",
             "",
             content
           ].join("\n")
@@ -121,6 +137,40 @@ async function summarizeWithLMStudio(page) {
   return summary.trim();
 }
 
+async function enrichPageWithOcr(page) {
+  if (!ocrEnabledInput.checked) {
+    return { ...page, ocrResults: [] };
+  }
+
+  const images = Array.isArray(page.images) ? page.images.slice(0, 5) : [];
+  if (!images.length) {
+    return { ...page, ocrResults: [] };
+  }
+
+  const endpoint = ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      pageUrl: page.url,
+      images
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OCR 요청 실패: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  return {
+    ...page,
+    ocrResults: Array.isArray(data.results) ? data.results : []
+  };
+}
+
 function renderPageMeta(page, saved) {
   pageMetaElement.hidden = false;
   pageMetaElement.textContent = [
@@ -128,6 +178,8 @@ function renderPageMeta(page, saved) {
     page.url,
     `본문 ${page.text.length.toLocaleString()}자`,
     `댓글 후보 ${page.comments.length.toLocaleString()}개`,
+    `이미지 후보 ${(page.images || []).length.toLocaleString()}개`,
+    `OCR 결과 ${(page.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     `저장 ${new Date(saved.collectedAt).toLocaleString()}`
   ].join("\n");
 }
@@ -157,6 +209,26 @@ function safeFileName(title) {
 }
 
 function toMarkdown(saved) {
+  const ocrSection = saved.ocrResults && saved.ocrResults.length
+    ? [
+      "## Image OCR",
+      "",
+      ...saved.ocrResults.flatMap((result) => [
+        `### Image ${result.index}`,
+        "",
+        `- URL: ${result.url}`,
+        `- Size: ${result.width}x${result.height}`,
+        result.alt ? `- Alt: ${result.alt}` : "",
+        result.error ? `- Error: ${result.error}` : "",
+        "",
+        "```text",
+        result.text || "",
+        "```",
+        ""
+      ].filter(Boolean))
+    ]
+    : [];
+
   return [
     `# ${saved.title}`,
     "",
@@ -169,6 +241,7 @@ function toMarkdown(saved) {
     "",
     saved.summary,
     "",
+    ...ocrSection,
     "## Source Text",
     "",
     "```text",
@@ -214,12 +287,18 @@ async function autoSaveMarkdown(saved) {
 }
 
 async function restoreSettings() {
-  const settings = await browser.storage.local.get(["model", "maxChars", "lastSavedUrl"]);
+  const settings = await browser.storage.local.get(["model", "maxChars", "ocrEnabled", "ocrEndpoint", "lastSavedUrl"]);
   if (settings.model) {
     modelInput.value = settings.model;
   }
   if (settings.maxChars) {
     maxCharsInput.value = settings.maxChars;
+  }
+  if (typeof settings.ocrEnabled === "boolean") {
+    ocrEnabledInput.checked = settings.ocrEnabled;
+  }
+  if (settings.ocrEndpoint) {
+    ocrEndpointInput.value = settings.ocrEndpoint;
   }
   if (settings.lastSavedUrl) {
     const stored = await browser.storage.local.get(storageKeyFor(settings.lastSavedUrl));
@@ -230,7 +309,9 @@ async function restoreSettings() {
 async function persistSettings() {
   await browser.storage.local.set({
     model: modelInput.value.trim() || "gemma-4-26b-a4b-it",
-    maxChars: Math.max(1000, Number(maxCharsInput.value) || 24000)
+    maxChars: Math.max(1000, Number(maxCharsInput.value) || 24000),
+    ocrEnabled: ocrEnabledInput.checked,
+    ocrEndpoint: ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT
   });
 }
 
@@ -241,10 +322,18 @@ collectButton.addEventListener("click", async () => {
 
   try {
     await persistSettings();
-    const page = await collectCurrentPage();
+    let page = await collectCurrentPage();
 
     if (!page.text || page.text.length < 20) {
       throw new Error("수집된 텍스트가 너무 짧습니다. 페이지가 완전히 로드된 뒤 다시 시도하세요.");
+    }
+
+    if (ocrEnabledInput.checked) {
+      setStatus("이미지 OCR 중...");
+      summaryElement.textContent = "이미지 후보를 OCR 서버로 보내고 있습니다.";
+      page = await enrichPageWithOcr(page);
+    } else {
+      page = { ...page, ocrResults: [] };
     }
 
     setStatus("LM Studio 요약 중...");
