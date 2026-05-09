@@ -7,7 +7,7 @@ Personal Firefox extension for saving the current page and summarizing it with L
 - Firefox
 - LM Studio local server running at `http://127.0.0.1:2000`
 - A loaded model in LM Studio
-- Python 3.10+ for the optional OCR server
+- Python 3.11 for the optional OCR server
 
 ## Load in Firefox
 
@@ -42,7 +42,7 @@ Start it with:
 .\scripts\start-ocr-server.ps1
 ```
 
-The first run installs Python dependencies and downloads EasyOCR's Korean and English models. Keep this terminal open while using OCR.
+The first run creates `.venv-ocr`, installs Python dependencies, and downloads EasyOCR's Korean and English models. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
 
 ## Notes
 
