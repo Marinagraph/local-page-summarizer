@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 import easyocr
+import numpy as np
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,9 @@ reader: easyocr.Reader | None = None
 
 class ImageCandidate(BaseModel):
     url: str
+    originalUrl: str | None = ""
+    linkedUrl: str | None = ""
+    fetchError: str | None = ""
     alt: str | None = ""
     width: int | None = 0
     height: int | None = 0
@@ -74,7 +78,7 @@ def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:
 
 def ocr_image(raw: bytes) -> str:
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    result: list[Any] = get_reader().readtext(image)
+    result: list[Any] = get_reader().readtext(np.array(image))
     lines = [str(item[1]).strip() for item in result if len(item) >= 2 and str(item[1]).strip()]
     return "\n".join(lines)
 
@@ -91,30 +95,35 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
 
     results = []
     for index, candidate in enumerate(payload.images[:MAX_IMAGES], start=1):
+        display_url = candidate.originalUrl or candidate.linkedUrl or candidate.url
         try:
             raw = load_image_bytes(candidate, payload.pageUrl)
             text = ocr_image(raw)
             results.append(
                 {
                     "index": index,
-                    "url": candidate.url,
+                    "url": display_url,
                     "alt": candidate.alt or "",
                     "width": candidate.width or 0,
                     "height": candidate.height or 0,
                     "text": text,
-                    "error": "",
+                    "error": candidate.fetchError or "",
                 }
             )
         except Exception as exc:
+            error = str(exc)
+            if candidate.fetchError:
+                error = f"{candidate.fetchError}; OCR fallback failed: {error}"
+
             results.append(
                 {
                     "index": index,
-                    "url": candidate.url,
+                    "url": display_url,
                     "alt": candidate.alt or "",
                     "width": candidate.width or 0,
                     "height": candidate.height or 0,
                     "text": "",
-                    "error": str(exc),
+                    "error": error,
                 }
             )
 

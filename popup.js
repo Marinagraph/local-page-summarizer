@@ -147,6 +147,7 @@ async function enrichPageWithOcr(page) {
     return { ...page, ocrResults: [] };
   }
 
+  const preparedImages = await Promise.all(images.map(prepareImageForOcr));
   const endpoint = ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -155,7 +156,7 @@ async function enrichPageWithOcr(page) {
     },
     body: JSON.stringify({
       pageUrl: page.url,
-      images
+      images: preparedImages
     })
   });
 
@@ -169,6 +170,48 @@ async function enrichPageWithOcr(page) {
     ...page,
     ocrResults: Array.isArray(data.results) ? data.results : []
   };
+}
+
+async function prepareImageForOcr(image) {
+  const url = image.linkedUrl || image.url;
+
+  try {
+    const response = await fetch(url, {
+      credentials: "include",
+      cache: "force-cache"
+    });
+
+    if (!response.ok) {
+      throw new Error(`image fetch failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) {
+      throw new Error(`not an image response: ${blob.type || "unknown"}`);
+    }
+
+    const dataUrl = await blobToDataUrl(blob);
+    return {
+      ...image,
+      originalUrl: image.url,
+      url: dataUrl
+    };
+  } catch (error) {
+    return {
+      ...image,
+      url,
+      fetchError: error && error.message ? error.message : String(error)
+    };
+  }
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("failed to read image blob"));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function renderPageMeta(page, saved) {

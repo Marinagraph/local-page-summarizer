@@ -46,16 +46,45 @@ function collectImageCandidates() {
   const seen = new Set();
   const images = [];
 
+  function firstSrcFromSrcset(srcset) {
+    return (srcset || "").split(",")[0].trim().split(/\s+/)[0] || "";
+  }
+
+  function resolveUrl(value) {
+    if (!value) {
+      return "";
+    }
+
+    try {
+      return new URL(value, location.href).href;
+    } catch {
+      return value;
+    }
+  }
+
+  function isLikelyImageUrl(value) {
+    return /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(value);
+  }
+
   for (const image of document.querySelectorAll("img")) {
-    const src = image.currentSrc || image.src || image.getAttribute("data-src") || "";
+    const src = resolveUrl(
+      image.currentSrc ||
+      image.src ||
+      image.getAttribute("data-original") ||
+      image.getAttribute("data-src") ||
+      image.getAttribute("data-lazy-src") ||
+      image.getAttribute("data-url") ||
+      firstSrcFromSrcset(image.getAttribute("srcset"))
+    );
     const width = image.naturalWidth || image.width || 0;
     const height = image.naturalHeight || image.height || 0;
     const lowerSrc = src.toLowerCase();
+    const linkedImage = resolveUrl(image.closest("a")?.href || "");
 
     if (!src || seen.has(src)) {
       continue;
     }
-    if (width < 300 || height < 180) {
+    if ((width < 300 || height < 180) && !isLikelyImageUrl(src) && !isLikelyImageUrl(linkedImage)) {
       continue;
     }
     if (lowerSrc.includes("logo") || lowerSrc.includes("avatar") || lowerSrc.includes("profile") || lowerSrc.includes("emoji")) {
@@ -68,6 +97,7 @@ function collectImageCandidates() {
     seen.add(src);
     images.push({
       url: src,
+      linkedUrl: isLikelyImageUrl(linkedImage) ? linkedImage : "",
       alt: image.alt || "",
       width,
       height
