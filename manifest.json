@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Local Page Summarizer",
+  "version": "0.1.0",
+  "description": "Save the current page and summarize it with LM Studio running locally.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:2000/*",
+    "http://localhost:2000/*"
+  ],
+  "action": {
+    "default_title": "Save and summarize",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "contentScript.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "local-page-summarizer@example.local",
+      "data_collection_permissions": {
+        "required": [
+          "browsingActivity",
+          "websiteContent"
+        ]
+      }
+    }
+  }
+}

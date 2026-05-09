@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Page Summarizer</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <div>
+          <h1>Page Summarizer</h1>
+          <p id="status">LM Studio: http://127.0.0.1:2000</p>
+        </div>
+      </header>
+
+      <section class="controls" aria-label="Actions">
+        <button id="collectButton" type="button">Save & Summarize</button>
+        <button id="exportButton" type="button" class="secondary">Export Markdown</button>
+      </section>
+
+      <section class="settings" aria-label="Settings">
+        <label>
+          Model
+          <input id="modelInput" type="text" value="gemma-4-26b-a4b-it" spellcheck="false">
+        </label>
+        <label>
+          Max chars
+          <input id="maxCharsInput" type="number" min="1000" max="200000" step="1000" value="24000">
+        </label>
+      </section>
+
+      <section id="pageMeta" class="meta" hidden></section>
+
+      <section class="output" aria-label="Summary">
+        <pre id="summary">현재 페이지에서 버튼을 누르면 본문을 저장하고 요약합니다.</pre>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
