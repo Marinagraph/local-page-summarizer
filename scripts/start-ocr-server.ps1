@@ -3,6 +3,17 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $venv = Join-Path $root ".venv-ocr"
 $python = Join-Path $venv "Scripts\python.exe"
+$healthUrl = "http://127.0.0.1:2010/health"
+
+try {
+  $health = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
+  if ($health.StatusCode -eq 200) {
+    Write-Host "OCR server is already running at $healthUrl"
+    exit 0
+  }
+} catch {
+  # Server is not running yet.
+}
 
 function Get-BasePython {
   $py311 = & py -3.11 -c "import sys; print(sys.executable)" 2>$null
