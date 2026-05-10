@@ -141,10 +141,53 @@ function getBestTextSource() {
   return candidates[0] || { element: document.body, text: cleanText(document.body.innerText || "") };
 }
 
+function collectYouTubeTranscript() {
+  if (!location.hostname.includes("youtube.com")) {
+    return { text: "", segments: [] };
+  }
+
+  const segmentSelectors = [
+    "ytd-transcript-segment-renderer",
+    "yt-transcript-segment-renderer",
+    "[class*='transcript-segment']"
+  ];
+  const segments = [];
+  const seen = new Set();
+
+  for (const selector of segmentSelectors) {
+    for (const element of document.querySelectorAll(selector)) {
+      const timestampElement = element.querySelector("#timestamp, .segment-timestamp, [class*='timestamp']");
+      const textElement = element.querySelector("#content-text, .segment-text, yt-formatted-string, [class*='segment-text']");
+      const timestamp = cleanText(timestampElement ? timestampElement.innerText || "" : "");
+      const text = cleanText(textElement ? textElement.innerText || "" : element.innerText || "");
+      const normalizedText = cleanText(text.replace(timestamp, ""));
+
+      if (!normalizedText || normalizedText.length < 2) {
+        continue;
+      }
+
+      const key = `${timestamp}|${normalizedText}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      segments.push({ timestamp, text: normalizedText });
+    }
+  }
+
+  const text = cleanText(segments.map((segment) => {
+    return segment.timestamp ? `${segment.timestamp} ${segment.text}` : segment.text;
+  }).join("\n"));
+
+  return { text, segments };
+}
+
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const bestSource = getBestTextSource();
   const text = cleanText(selection || bestSource.text || document.body.innerText || "");
+  const transcript = collectYouTubeTranscript();
 
   return {
     title: document.title || location.href,
@@ -153,6 +196,7 @@ function collectPage() {
     text,
     comments: collectLikelyComments(),
     images: collectImageCandidates(),
+    transcript,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };

@@ -30,6 +30,9 @@ function compactForPrompt(page, maxChars) {
   const comments = page.comments && page.comments.length
     ? `\n\n[댓글 후보]\n${page.comments.map((comment, index) => `${index + 1}. ${comment}`).join("\n\n")}`
     : "";
+  const transcriptText = page.transcript && page.transcript.text
+    ? `\n\n[YouTube transcript]\n${page.transcript.text}`
+    : "";
   const ocrText = page.ocrResults && page.ocrResults.length
     ? `\n\n[이미지 OCR 텍스트]\n${page.ocrResults.map((result) => [
       `이미지 ${result.index}: ${result.width}x${result.height}`,
@@ -46,6 +49,7 @@ function compactForPrompt(page, maxChars) {
     page.selectedOnly ? "수집 범위: 사용자가 선택한 텍스트" : "수집 범위: 페이지 본문",
     "",
     page.text,
+    transcriptText,
     comments,
     ocrText
   ].filter(Boolean).join("\n");
@@ -219,6 +223,7 @@ function renderPageMeta(page, saved) {
   pageMetaElement.textContent = [
     page.title,
     page.url,
+    `Transcript ${(page.transcript?.segments || []).length.toLocaleString()} segments`,
     `본문 ${page.text.length.toLocaleString()}자`,
     `댓글 후보 ${page.comments.length.toLocaleString()}개`,
     `이미지 후보 ${(page.images || []).length.toLocaleString()}개`,
@@ -271,6 +276,16 @@ function toMarkdown(saved) {
       ].filter(Boolean))
     ]
     : [];
+  const transcriptSection = saved.transcript && saved.transcript.text
+    ? [
+      "## YouTube Transcript",
+      "",
+      "```text",
+      saved.transcript.text,
+      "```",
+      ""
+    ]
+    : [];
 
   return [
     `# ${saved.title}`,
@@ -284,6 +299,7 @@ function toMarkdown(saved) {
     "",
     saved.summary,
     "",
+    ...transcriptSection,
     ...ocrSection,
     "## Source Text",
     "",
@@ -368,7 +384,8 @@ collectButton.addEventListener("click", async () => {
     let page = await collectCurrentPage();
 
     const hasImagesForOcr = ocrEnabledInput.checked && Array.isArray(page.images) && page.images.length > 0;
-    if ((!page.text || page.text.length < 20) && !hasImagesForOcr) {
+    const hasTranscript = Boolean(page.transcript && page.transcript.text);
+    if ((!page.text || page.text.length < 20) && !hasImagesForOcr && !hasTranscript) {
       throw new Error("수집된 텍스트가 너무 짧습니다. 페이지가 완전히 로드된 뒤 다시 시도하세요.");
     }
 
