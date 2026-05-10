@@ -111,11 +111,40 @@ function collectImageCandidates() {
   return images;
 }
 
+function getBestTextSource() {
+  const selectors = [
+    ".view_content",
+    ".article_content",
+    ".board_main_view",
+    ".read_body",
+    ".body_area",
+    ".write_div",
+    ".view_body",
+    "#board_read",
+    "article",
+    "main",
+    "[role='main']",
+    "body"
+  ];
+  const candidates = [];
+
+  for (const selector of selectors) {
+    for (const element of document.querySelectorAll(selector)) {
+      const text = cleanText(element.innerText || "");
+      if (text && !candidates.some((candidate) => candidate.text === text)) {
+        candidates.push({ element, text });
+      }
+    }
+  }
+
+  candidates.sort((a, b) => b.text.length - a.text.length);
+  return candidates[0] || { element: document.body, text: cleanText(document.body.innerText || "") };
+}
+
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
-  const main = document.querySelector("main, article, [role='main']");
-  const sourceElement = main || document.body;
-  const text = cleanText(selection || sourceElement.innerText || document.body.innerText || "");
+  const bestSource = getBestTextSource();
+  const text = cleanText(selection || bestSource.text || document.body.innerText || "");
 
   return {
     title: document.title || location.href,

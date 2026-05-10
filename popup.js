@@ -367,7 +367,8 @@ collectButton.addEventListener("click", async () => {
     await persistSettings();
     let page = await collectCurrentPage();
 
-    if (!page.text || page.text.length < 20) {
+    const hasImagesForOcr = ocrEnabledInput.checked && Array.isArray(page.images) && page.images.length > 0;
+    if ((!page.text || page.text.length < 20) && !hasImagesForOcr) {
       throw new Error("수집된 텍스트가 너무 짧습니다. 페이지가 완전히 로드된 뒤 다시 시도하세요.");
     }
 
