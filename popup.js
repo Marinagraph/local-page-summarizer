@@ -108,6 +108,7 @@ function renderMetaFromSaved(saved) {
 
 function renderJobState(state) {
   if (!state) {
+    collectButton.disabled = false;
     return;
   }
 
@@ -115,8 +116,8 @@ function renderJobState(state) {
     collectButton.disabled = true;
     setStatus(state.message || "요약 작업 진행 중...");
     summaryElement.textContent = [
-      "요약 작업이 background에서 진행 중입니다.",
-      "이 팝업을 닫거나 다른 프로그램을 사용해도 작업은 계속됩니다.",
+      "요약 작업이 원본 페이지 탭에서 진행 중입니다.",
+      "원본 탭만 닫지 않으면 다른 브라우저, VSCode, 터미널을 사용해도 됩니다.",
       "",
       state.title || state.url || "",
       state.message || ""
@@ -138,6 +139,12 @@ function renderJobState(state) {
   if (state.status === "error") {
     setStatus("오류");
     summaryElement.textContent = state.error || "요약 중 오류가 발생했습니다.";
+    return;
+  }
+
+  if (state.status === "idle") {
+    setStatus("작업 상태 초기화됨");
+    summaryElement.textContent = state.message || "다시 Save & Summarize를 누를 수 있습니다.";
   }
 }
 
@@ -186,23 +193,29 @@ async function persistSettings() {
   return settings;
 }
 
+async function markStaleJob(currentState) {
+  if (!currentState || (currentState.status !== "queued" && currentState.status !== "running")) {
+    return;
+  }
+
+  await browser.storage.local.set({
+    summaryJobState: {
+      ...currentState,
+      status: "error",
+      message: "오류",
+      error: "이전 작업이 응답하지 않아 초기화되었습니다.",
+      updatedAt: new Date().toISOString()
+    }
+  });
+}
+
 async function startSummaryJob() {
   const currentState = (await browser.storage.local.get("summaryJobState")).summaryJobState;
   if (isLiveJobState(currentState)) {
     renderJobState(currentState);
     return;
   }
-  if (currentState && (currentState.status === "queued" || currentState.status === "running")) {
-    await browser.storage.local.set({
-      summaryJobState: {
-        ...currentState,
-        status: "error",
-        message: "오류",
-        error: "이전 작업이 응답하지 않아 초기화되었습니다.",
-        updatedAt: new Date().toISOString()
-      }
-    });
-  }
+  await markStaleJob(currentState);
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) {
@@ -230,19 +243,22 @@ async function startSummaryJob() {
   };
 
   await browser.storage.local.set({ summaryJobState: state });
-  browser.runtime.sendMessage({
-    type: "START_SUMMARY_JOB",
-    request
-  }).catch(async (error) => {
-    const errorState = {
-      ...state,
-      status: "error",
-      message: "오류",
-      error: error && error.message ? error.message : String(error),
-      updatedAt: new Date().toISOString()
-    };
-    await browser.storage.local.set({ summaryJobState: errorState });
-  });
+
+  try {
+    await browser.tabs.sendMessage(tab.id, {
+      type: "RUN_SUMMARY_JOB",
+      request
+    });
+  } catch (error) {
+    await browser.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["contentScript.js"]
+    });
+    await browser.tabs.sendMessage(tab.id, {
+      type: "RUN_SUMMARY_JOB",
+      request
+    });
+  }
 
   renderJobState(state);
 }
@@ -282,7 +298,7 @@ async function exportMarkdown() {
 collectButton.addEventListener("click", async () => {
   collectButton.disabled = true;
   setStatus("작업 시작 중...");
-  summaryElement.textContent = "요약 작업을 background로 넘기고 있습니다.";
+  summaryElement.textContent = "요약 작업을 원본 페이지 탭으로 넘기고 있습니다.";
 
   try {
     await startSummaryJob();

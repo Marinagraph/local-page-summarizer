@@ -3,6 +3,25 @@ const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
 let activeJobPromise = null;
 
+browser.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== "DOWNLOAD_MARKDOWN") {
+    return false;
+  }
+
+  return (async () => {
+    const blob = new Blob([message.markdown || ""], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    await browser.downloads.download({
+      url,
+      filename: message.filename || "Local Page Summarizer/page-summary.md",
+      saveAs: false,
+      conflictAction: "uniquify"
+    });
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return { ok: true };
+  })();
+});
+
 function storageKeyFor(url) {
   return `page:${url}`;
 }
