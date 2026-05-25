@@ -3,6 +3,7 @@ const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
 let activeJob = null;
 let activeAbortController = null;
+const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
 
 function storageKeyFor(url) {
   return `page:${url}`;
@@ -14,7 +15,7 @@ function isLiveJobState(state) {
   }
 
   const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
-  return updatedAt > 0 && Date.now() - updatedAt < 5 * 60 * 1000;
+  return updatedAt > 0 && Date.now() - updatedAt < LIVE_JOB_TTL_MS;
 }
 
 async function setJobState(partial) {
@@ -390,7 +391,13 @@ browser.runtime.onMessage.addListener((message) => {
 
   return (async () => {
     const currentState = (await browser.storage.local.get("summaryJobState")).summaryJobState;
-    if (activeJob || isLiveJobState(currentState)) {
+    const sameRequest = currentState && message.request && currentState.jobId === message.request.jobId;
+
+    if (activeJob) {
+      return { started: false, state: currentState };
+    }
+
+    if (isLiveJobState(currentState) && !sameRequest) {
       return { started: false, state: currentState };
     }
 

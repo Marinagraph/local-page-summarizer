@@ -13,6 +13,7 @@ const pageMetaElement = document.querySelector("#pageMeta");
 
 let lastSaved = null;
 let pollTimer = null;
+const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
 
 function isLiveJobState(state) {
   if (!state || (state.status !== "queued" && state.status !== "running")) {
@@ -20,7 +21,7 @@ function isLiveJobState(state) {
   }
 
   const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
-  return updatedAt > 0 && Date.now() - updatedAt < 5 * 60 * 1000;
+  return updatedAt > 0 && Date.now() - updatedAt < LIVE_JOB_TTL_MS;
 }
 
 function setStatus(message) {
@@ -242,7 +243,7 @@ async function startSummaryJob() {
     updatedAt: request.createdAt
   };
 
-  await browser.storage.local.set({ summaryJobState: state });
+  renderJobState(state);
   const response = await browser.runtime.sendMessage({
     type: "START_SUMMARY_JOB",
     request
@@ -253,7 +254,7 @@ async function startSummaryJob() {
     return;
   }
 
-  renderJobState(state);
+  renderJobState(response && response.state ? response.state : state);
 }
 
 async function refreshJobState() {
