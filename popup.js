@@ -218,12 +218,21 @@ async function startSummaryJob() {
   };
 
   await browser.storage.local.set({ summaryJobState: state });
-  const response = await browser.runtime.sendMessage({
+  browser.runtime.sendMessage({
     type: "START_SUMMARY_JOB",
     request
+  }).catch(async (error) => {
+    const errorState = {
+      ...state,
+      status: "error",
+      message: "오류",
+      error: error && error.message ? error.message : String(error),
+      updatedAt: new Date().toISOString()
+    };
+    await browser.storage.local.set({ summaryJobState: errorState });
   });
 
-  renderJobState(response && response.state ? response.state : state);
+  renderJobState(state);
 }
 
 async function refreshJobState() {

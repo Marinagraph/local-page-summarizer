@@ -383,6 +383,8 @@ browser.runtime.onMessage.addListener((message) => {
     });
 
     activeJobPromise = runSummaryJob(message.request);
+    await activeJobPromise;
+
     return {
       started: true,
       state: (await browser.storage.local.get("summaryJobState")).summaryJobState
