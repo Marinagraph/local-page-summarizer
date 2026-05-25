@@ -51,6 +51,7 @@ The first run creates `.venv-ocr`, installs Python dependencies, and downloads E
 - If likely comments are found, the summary asks the model to quote short notable comments for reference.
 - If OCR is enabled, the extension sends up to five large image URLs to the local OCR server and adds extracted text to the summary prompt.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.
+- Long summaries run in an inactive extension runner tab, so the popup can close and you can keep using the browser or other apps while the job continues.
 - Saved entries are stored in `browser.storage.local`.
 - After each summary, a Markdown file is automatically downloaded under `Local Page Summarizer`.
 - `Export Markdown` exports the most recently saved page.
