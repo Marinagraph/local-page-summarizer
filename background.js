@@ -1,31 +1,30 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
-const statusElement = document.querySelector("#runnerStatus");
-let jobState = null;
+let activeJobPromise = null;
 
 function storageKeyFor(url) {
   return `page:${url}`;
 }
 
-function jobRequestKey(jobId) {
-  return `jobRequest:${jobId}`;
-}
-
-function setRunnerStatus(message) {
-  if (statusElement) {
-    statusElement.textContent = message;
+function isLiveJobState(state) {
+  if (!state || (state.status !== "queued" && state.status !== "running")) {
+    return false;
   }
+
+  const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
+  return updatedAt > 0 && Date.now() - updatedAt < 30 * 60 * 1000;
 }
 
-async function updateJob(partial) {
-  jobState = {
-    ...jobState,
+async function setJobState(partial) {
+  const current = (await browser.storage.local.get("summaryJobState")).summaryJobState || {};
+  const next = {
+    ...current,
     ...partial,
     updatedAt: new Date().toISOString()
   };
-  await browser.storage.local.set({ summaryJobState: jobState });
-  setRunnerStatus(`${jobState.status}\n${jobState.message || ""}\n${jobState.url || ""}`);
+  await browser.storage.local.set({ summaryJobState: next });
+  return next;
 }
 
 function compactForPrompt(page, maxChars) {
@@ -309,33 +308,19 @@ async function autoSaveMarkdown(saved) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-async function runJob() {
-  const params = new URLSearchParams(location.search);
-  const jobId = params.get("jobId");
-  if (!jobId) {
-    throw new Error("Missing jobId.");
-  }
-
-  const stored = await browser.storage.local.get(jobRequestKey(jobId));
-  const request = stored[jobRequestKey(jobId)];
-  if (!request) {
-    throw new Error("작업 요청을 찾을 수 없습니다.");
-  }
-
-  jobState = {
-    jobId,
+async function runSummaryJob(request) {
+  await setJobState({
+    jobId: request.jobId,
     status: "running",
     message: "페이지 수집 중...",
-    title: "",
-    url: "",
-    createdAt: request.createdAt,
-    updatedAt: new Date().toISOString()
-  };
-  await updateJob(jobState);
+    title: request.title || "",
+    url: request.url || "",
+    createdAt: request.createdAt
+  });
 
   try {
     let page = await collectPageFromTab(request.tabId);
-    await updateJob({
+    await setJobState({
       message: "페이지 수집 완료",
       title: page.title,
       url: page.url
@@ -348,20 +333,20 @@ async function runJob() {
     }
 
     if (request.settings.ocrEnabled) {
-      await updateJob({ message: "이미지 OCR 중..." });
+      await setJobState({ message: "이미지 OCR 중..." });
       page = await enrichPageWithOcr(page, request.settings);
     } else {
       page = { ...page, ocrResults: [] };
     }
 
-    await updateJob({ message: "LM Studio 요약 중..." });
+    await setJobState({ message: "LM Studio 요약 중..." });
     const summary = await summarizeWithLMStudio(page, request.settings);
 
-    await updateJob({ message: "결과 저장 중..." });
+    await setJobState({ message: "결과 저장 중..." });
     const saved = await saveResult(page, summary);
     await autoSaveMarkdown(saved);
 
-    await updateJob({
+    await setJobState({
       status: "done",
       message: "저장 완료: Markdown 자동 저장됨",
       summary,
@@ -369,31 +354,38 @@ async function runJob() {
       url: saved.url,
       savedAt: saved.savedAt
     });
-
-    setTimeout(() => {
-      window.close();
-    }, 3000);
   } catch (error) {
-    await updateJob({
+    await setJobState({
       status: "error",
       message: "오류",
       error: error && error.message ? error.message : String(error)
     });
   } finally {
-    await browser.storage.local.remove(jobRequestKey(jobId));
+    activeJobPromise = null;
   }
 }
 
-runJob().catch(async (error) => {
-  setRunnerStatus(error && error.message ? error.message : String(error));
-  const params = new URLSearchParams(location.search);
-  const jobId = params.get("jobId");
-  if (jobId) {
-    jobState = jobState || { jobId };
-    await updateJob({
-      status: "error",
-      message: "오류",
-      error: error && error.message ? error.message : String(error)
-    });
+browser.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== "START_SUMMARY_JOB") {
+    return false;
   }
+
+  return (async () => {
+    const currentState = (await browser.storage.local.get("summaryJobState")).summaryJobState;
+    if (activeJobPromise || isLiveJobState(currentState)) {
+      return { started: false, state: currentState };
+    }
+
+    await setJobState({
+      ...message.request,
+      status: "queued",
+      message: "작업 준비 중..."
+    });
+
+    activeJobPromise = runSummaryJob(message.request);
+    return {
+      started: true,
+      state: (await browser.storage.local.get("summaryJobState")).summaryJobState
+    };
+  })();
 });

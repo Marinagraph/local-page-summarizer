@@ -30,10 +30,6 @@ function storageKeyFor(url) {
   return `page:${url}`;
 }
 
-function jobRequestKey(jobId) {
-  return `jobRequest:${jobId}`;
-}
-
 function safeFileName(title) {
   return title
     .replace(/[\\/:*?"<>|]+/g, " ")
@@ -118,7 +114,7 @@ function renderJobState(state) {
     collectButton.disabled = true;
     setStatus(state.message || "요약 작업 진행 중...");
     summaryElement.textContent = [
-      "요약 작업이 별도 runner 탭에서 진행 중입니다.",
+      "요약 작업이 background에서 진행 중입니다.",
       "이 팝업을 닫거나 다른 프로그램을 사용해도 작업은 계속됩니다.",
       "",
       state.title || state.url || "",
@@ -207,6 +203,8 @@ async function startSummaryJob() {
     jobId,
     tabId: tab.id,
     settings,
+    title: tab.title || "",
+    url: tab.url || "",
     createdAt: new Date().toISOString()
   };
   const state = {
@@ -219,18 +217,13 @@ async function startSummaryJob() {
     updatedAt: request.createdAt
   };
 
-  await browser.storage.local.set({
-    currentJobId: jobId,
-    [jobRequestKey(jobId)]: request,
-    summaryJobState: state
+  await browser.storage.local.set({ summaryJobState: state });
+  const response = await browser.runtime.sendMessage({
+    type: "START_SUMMARY_JOB",
+    request
   });
 
-  await browser.tabs.create({
-    url: browser.runtime.getURL(`runner.html?jobId=${encodeURIComponent(jobId)}`),
-    active: false
-  });
-
-  renderJobState(state);
+  renderJobState(response && response.state ? response.state : state);
 }
 
 async function refreshJobState() {
@@ -268,7 +261,7 @@ async function exportMarkdown() {
 collectButton.addEventListener("click", async () => {
   collectButton.disabled = true;
   setStatus("작업 시작 중...");
-  summaryElement.textContent = "요약 작업을 별도 runner 탭으로 넘기고 있습니다.";
+  summaryElement.textContent = "요약 작업을 background로 넘기고 있습니다.";
 
   try {
     await startSummaryJob();
