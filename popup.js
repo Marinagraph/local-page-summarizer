@@ -2,6 +2,7 @@ const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
 const collectButton = document.querySelector("#collectButton");
 const exportButton = document.querySelector("#exportButton");
+const resetButton = document.querySelector("#resetButton");
 const modelInput = document.querySelector("#modelInput");
 const maxCharsInput = document.querySelector("#maxCharsInput");
 const ocrEnabledInput = document.querySelector("#ocrEnabledInput");
@@ -19,7 +20,7 @@ function isLiveJobState(state) {
   }
 
   const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
-  return updatedAt > 0 && Date.now() - updatedAt < 30 * 60 * 1000;
+  return updatedAt > 0 && Date.now() - updatedAt < 5 * 60 * 1000;
 }
 
 function setStatus(message) {
@@ -191,6 +192,17 @@ async function startSummaryJob() {
     renderJobState(currentState);
     return;
   }
+  if (currentState && (currentState.status === "queued" || currentState.status === "running")) {
+    await browser.storage.local.set({
+      summaryJobState: {
+        ...currentState,
+        status: "error",
+        message: "오류",
+        error: "이전 작업이 응답하지 않아 초기화되었습니다.",
+        updatedAt: new Date().toISOString()
+      }
+    });
+  }
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) {
@@ -294,6 +306,19 @@ exportButton.addEventListener("click", async () => {
   } finally {
     exportButton.disabled = false;
   }
+});
+
+resetButton.addEventListener("click", async () => {
+  const resetState = {
+    status: "idle",
+    message: "작업 상태가 초기화되었습니다.",
+    updatedAt: new Date().toISOString()
+  };
+
+  await browser.storage.local.set({ summaryJobState: resetState });
+  collectButton.disabled = false;
+  setStatus("작업 상태 초기화됨");
+  summaryElement.textContent = "이전 작업 상태를 초기화했습니다. 다시 Save & Summarize를 누를 수 있습니다.";
 });
 
 restoreSettings().catch((error) => {

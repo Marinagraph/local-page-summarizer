@@ -13,7 +13,7 @@ function isLiveJobState(state) {
   }
 
   const updatedAt = state.updatedAt ? new Date(state.updatedAt).getTime() : 0;
-  return updatedAt > 0 && Date.now() - updatedAt < 30 * 60 * 1000;
+  return updatedAt > 0 && Date.now() - updatedAt < 5 * 60 * 1000;
 }
 
 async function setJobState(partial) {
