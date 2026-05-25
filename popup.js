@@ -243,21 +243,14 @@ async function startSummaryJob() {
   };
 
   await browser.storage.local.set({ summaryJobState: state });
+  const response = await browser.runtime.sendMessage({
+    type: "START_SUMMARY_JOB",
+    request
+  });
 
-  try {
-    await browser.tabs.sendMessage(tab.id, {
-      type: "RUN_SUMMARY_JOB",
-      request
-    });
-  } catch (error) {
-    await browser.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ["contentScript.js"]
-    });
-    await browser.tabs.sendMessage(tab.id, {
-      type: "RUN_SUMMARY_JOB",
-      request
-    });
+  if (response && response.state) {
+    renderJobState(response.state);
+    return;
   }
 
   renderJobState(state);
@@ -325,13 +318,18 @@ exportButton.addEventListener("click", async () => {
 });
 
 resetButton.addEventListener("click", async () => {
-  const resetState = {
-    status: "idle",
-    message: "작업 상태가 초기화되었습니다.",
-    updatedAt: new Date().toISOString()
-  };
+  try {
+    await browser.runtime.sendMessage({ type: "RESET_SUMMARY_JOB" });
+  } catch {
+    await browser.storage.local.set({
+      summaryJobState: {
+        status: "idle",
+        message: "작업 상태가 초기화되었습니다.",
+        updatedAt: new Date().toISOString()
+      }
+    });
+  }
 
-  await browser.storage.local.set({ summaryJobState: resetState });
   collectButton.disabled = false;
   setStatus("작업 상태 초기화됨");
   summaryElement.textContent = "이전 작업 상태를 초기화했습니다. 다시 Save & Summarize를 누를 수 있습니다.";

@@ -1,26 +1,8 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
-let activeJobPromise = null;
-
-browser.runtime.onMessage.addListener((message) => {
-  if (!message || message.type !== "DOWNLOAD_MARKDOWN") {
-    return false;
-  }
-
-  return (async () => {
-    const blob = new Blob([message.markdown || ""], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    await browser.downloads.download({
-      url,
-      filename: message.filename || "Local Page Summarizer/page-summary.md",
-      saveAs: false,
-      conflictAction: "uniquify"
-    });
-    setTimeout(() => URL.revokeObjectURL(url), 30000);
-    return { ok: true };
-  })();
-});
+let activeJob = null;
+let activeAbortController = null;
 
 function storageKeyFor(url) {
   return `page:${url}`;
@@ -44,6 +26,15 @@ async function setJobState(partial) {
   };
   await browser.storage.local.set({ summaryJobState: next });
   return next;
+}
+
+async function collectPageFromTab(tabId) {
+  try {
+    return await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
+  } catch (error) {
+    await browser.tabs.executeScript(tabId, { file: "contentScript.js" });
+    return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
+  }
 }
 
 function compactForPrompt(page, maxChars) {
@@ -77,25 +68,14 @@ function compactForPrompt(page, maxChars) {
   return body.slice(0, maxChars);
 }
 
-async function collectPageFromTab(tabId) {
-  try {
-    return await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
-  } catch (error) {
-    await browser.scripting.executeScript({
-      target: { tabId },
-      files: ["contentScript.js"]
-    });
-    return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
-  }
-}
-
-async function summarizeWithLMStudio(page, settings) {
+async function summarizeWithLMStudio(page, settings, signal) {
   const model = settings.model || "gemma-4-26b-a4b-it";
   const maxChars = Math.max(1000, Number(settings.maxChars) || 24000);
   const content = compactForPrompt(page, maxChars);
 
   const response = await fetch(LM_STUDIO_ENDPOINT, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json"
     },
@@ -160,7 +140,7 @@ async function summarizeWithLMStudio(page, settings) {
   return summary.trim();
 }
 
-async function enrichPageWithOcr(page, settings) {
+async function enrichPageWithOcr(page, settings, signal) {
   if (!settings.ocrEnabled) {
     return { ...page, ocrResults: [] };
   }
@@ -170,10 +150,11 @@ async function enrichPageWithOcr(page, settings) {
     return { ...page, ocrResults: [] };
   }
 
-  const preparedImages = await Promise.all(images.map(prepareImageForOcr));
+  const preparedImages = await Promise.all(images.map((image) => prepareImageForOcr(image, signal)));
   const endpoint = settings.ocrEndpoint || DEFAULT_OCR_ENDPOINT;
   const response = await fetch(endpoint, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json"
     },
@@ -195,11 +176,12 @@ async function enrichPageWithOcr(page, settings) {
   };
 }
 
-async function prepareImageForOcr(image) {
+async function prepareImageForOcr(image, signal) {
   const url = image.linkedUrl || image.url;
 
   try {
     const response = await fetch(url, {
+      signal,
       credentials: "include",
       cache: "force-cache"
     });
@@ -313,7 +295,7 @@ function toMarkdown(saved) {
   ].join("\n");
 }
 
-async function autoSaveMarkdown(saved) {
+async function downloadMarkdown(saved) {
   const blob = new Blob([toMarkdown(saved)], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
 
@@ -324,10 +306,13 @@ async function autoSaveMarkdown(saved) {
     conflictAction: "uniquify"
   });
 
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 async function runSummaryJob(request) {
+  activeAbortController = new AbortController();
+  const signal = activeAbortController.signal;
+
   await setJobState({
     jobId: request.jobId,
     status: "running",
@@ -353,17 +338,17 @@ async function runSummaryJob(request) {
 
     if (request.settings.ocrEnabled) {
       await setJobState({ message: "이미지 OCR 중..." });
-      page = await enrichPageWithOcr(page, request.settings);
+      page = await enrichPageWithOcr(page, request.settings, signal);
     } else {
       page = { ...page, ocrResults: [] };
     }
 
     await setJobState({ message: "LM Studio 요약 중..." });
-    const summary = await summarizeWithLMStudio(page, request.settings);
+    const summary = await summarizeWithLMStudio(page, request.settings, signal);
 
     await setJobState({ message: "결과 저장 중..." });
     const saved = await saveResult(page, summary);
-    await autoSaveMarkdown(saved);
+    await downloadMarkdown(saved);
 
     await setJobState({
       status: "done",
@@ -380,18 +365,32 @@ async function runSummaryJob(request) {
       error: error && error.message ? error.message : String(error)
     });
   } finally {
-    activeJobPromise = null;
+    activeJob = null;
+    activeAbortController = null;
   }
 }
 
 browser.runtime.onMessage.addListener((message) => {
   if (!message || message.type !== "START_SUMMARY_JOB") {
+    if (message && message.type === "RESET_SUMMARY_JOB") {
+      if (activeAbortController) {
+        activeAbortController.abort();
+      }
+      activeJob = null;
+      return browser.storage.local.set({
+        summaryJobState: {
+          status: "idle",
+          message: "작업 상태가 초기화되었습니다.",
+          updatedAt: new Date().toISOString()
+        }
+      }).then(() => ({ ok: true }));
+    }
     return false;
   }
 
   return (async () => {
     const currentState = (await browser.storage.local.get("summaryJobState")).summaryJobState;
-    if (activeJobPromise || isLiveJobState(currentState)) {
+    if (activeJob || isLiveJobState(currentState)) {
       return { started: false, state: currentState };
     }
 
@@ -401,8 +400,8 @@ browser.runtime.onMessage.addListener((message) => {
       message: "작업 준비 중..."
     });
 
-    activeJobPromise = runSummaryJob(message.request);
-    await activeJobPromise;
+    activeJob = runSummaryJob(message.request);
+    activeJob.catch(() => {});
 
     return {
       started: true,
