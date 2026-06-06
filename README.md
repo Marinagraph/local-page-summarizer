@@ -51,6 +51,7 @@ Start it with:
 The first run creates `.venv-ocr`, installs CUDA-enabled PyTorch from the PyTorch `cu128` wheel index, installs Python dependencies, checks that PyTorch can see a CUDA GPU, and downloads EasyOCR's Korean and English models. The OCR server is GPU-only and fails to start if CUDA is not available. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
 If an older server is already responding on port 2010 but does not report a CUDA GPU from `/health`, the start script stops that stale process and starts the current GPU OCR server.
 The OCR reader is loaded during server startup so the first page summary does not pay the EasyOCR model-loading cost.
+OCR image downloads are performed in parallel, while EasyOCR recognition stays GPU-sequential for stability. The server uses `OCR_DOWNLOAD_WORKERS=5`, `OCR_REQUEST_TIMEOUT_SECONDS=8`, `OCR_EASYOCR_BATCH_SIZE=8`, and `OCR_EASYOCR_CANVAS_SIZE=2560` by default; set these environment variables before starting the OCR server if you need to tune speed versus memory/accuracy.
 
 ## Notes
 
@@ -58,7 +59,7 @@ The OCR reader is loaded during server startup so the first page summary does no
 - If nothing is selected, it summarizes the visible page body.
 - If likely comments are found, all currently visible comment candidates are analyzed. The extension does not fetch additional paginated comment pages.
 - On DCInside, rendered comment rows are collected from the visible comment list. If the row-based extraction fails, the extension falls back to parsing the visible `전체 댓글 ...개` text block.
-- If OCR is enabled, the extension sends up to five large image URLs found inside detected content containers to the local OCR server and adds extracted text to the summary prompt. It does not fall back to scanning every image in the page body, and it skips logos, avatars, banners, sidebars, comments, and reply areas.
+- If OCR is enabled, the extension sends up to five large image URLs found inside detected content containers to the local OCR server and adds extracted text to the summary prompt. It does not fall back to scanning every image in the page body, and it skips logos, avatars, banners, sidebars, comments, and reply areas. Markdown exports include OCR timing so slow pages can be diagnosed later.
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - For DCInside pages with both rendered image URLs and `imgPop` popup URLs, the rendered `dcimg`/`dccdn` URL is preferred for OCR. If the first URL returns an HTML block page, the OCR server retries the alternate original/linked URLs before reporting failure.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export. YouTube image OCR is skipped so recommendation thumbnails are not mixed into the summary.

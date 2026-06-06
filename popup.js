@@ -98,6 +98,9 @@ function toMarkdown(saved) {
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
+    ...(saved.ocrTiming ? [
+      `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
+    ] : []),
     "",
     "## Summary",
     "",

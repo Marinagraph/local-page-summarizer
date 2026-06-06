@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import io
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, NamedTuple
 
 import easyocr
@@ -18,7 +20,11 @@ from pydantic import BaseModel
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 IMAGE_SNIFF_BYTES = 16
-OCR_SERVER_VERSION = "0.3.16"
+MAX_DOWNLOAD_WORKERS = int(os.getenv("OCR_DOWNLOAD_WORKERS", "5"))
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("OCR_REQUEST_TIMEOUT_SECONDS", "8"))
+EASYOCR_BATCH_SIZE = int(os.getenv("OCR_EASYOCR_BATCH_SIZE", "8"))
+EASYOCR_CANVAS_SIZE = int(os.getenv("OCR_EASYOCR_CANVAS_SIZE", "2560"))
+OCR_SERVER_VERSION = "0.3.17"
 
 app = FastAPI(title="Local Page Summarizer OCR")
 app.add_middleware(
@@ -35,6 +41,7 @@ class LoadedImage(NamedTuple):
     raw: bytes
     content_type: str
     source_url: str
+    load_seconds: float
 
 
 class ImageCandidate(BaseModel):
@@ -106,6 +113,7 @@ def candidate_urls(candidate: ImageCandidate) -> list[str]:
 
 
 def load_image_url(url: str, page_url: str) -> LoadedImage:
+    started = time.perf_counter()
     content_type = "data:image"
     if url.startswith("data:image/"):
         try:
@@ -125,7 +133,7 @@ def load_image_url(url: str, page_url: str) -> LoadedImage:
                 "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
                 "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
             },
-            timeout=20,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
         raw = response.content
@@ -137,7 +145,7 @@ def load_image_url(url: str, page_url: str) -> LoadedImage:
     if looks_like_html_or_json(raw):
         raise ValueError(f"non-image response ({content_type or 'unknown'}, {describe_bytes(raw)})")
 
-    return LoadedImage(raw=raw, content_type=content_type, source_url=url)
+    return LoadedImage(raw=raw, content_type=content_type, source_url=url, load_seconds=time.perf_counter() - started)
 
 
 def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
@@ -159,14 +167,63 @@ def ocr_image(loaded: LoadedImage) -> str:
             f"cannot identify image file ({loaded.content_type or 'unknown'}, {describe_bytes(loaded.raw)})"
         ) from exc
 
-    result: list[Any] = get_reader().readtext(np.array(image))
-    lines = [str(item[1]).strip() for item in result if len(item) >= 2 and str(item[1]).strip()]
+    result: list[Any] = get_reader().readtext(
+        np.array(image),
+        batch_size=EASYOCR_BATCH_SIZE,
+        canvas_size=EASYOCR_CANVAS_SIZE,
+        detail=0,
+        paragraph=False,
+    )
+    lines = []
+    for item in result:
+        if isinstance(item, str):
+            text = item.strip()
+        elif len(item) >= 2:
+            text = str(item[1]).strip()
+        else:
+            text = ""
+        if text:
+            lines.append(text)
     return "\n".join(lines)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "gpu": gpu_name(), "version": OCR_SERVER_VERSION}
+    return {
+        "status": "ok",
+        "gpu": gpu_name(),
+        "version": OCR_SERVER_VERSION,
+        "downloadWorkers": str(MAX_DOWNLOAD_WORKERS),
+        "requestTimeoutSeconds": str(REQUEST_TIMEOUT_SECONDS),
+        "easyocrBatchSize": str(EASYOCR_BATCH_SIZE),
+        "easyocrCanvasSize": str(EASYOCR_CANVAS_SIZE),
+    }
+
+
+def empty_result(index: int, candidate: ImageCandidate, error: str = "") -> dict[str, Any]:
+    display_url = candidate.originalUrl or candidate.linkedUrl or candidate.url
+    if candidate.fetchError and error:
+        error = f"{candidate.fetchError}; OCR fallback failed: {error}"
+    elif candidate.fetchError:
+        error = candidate.fetchError
+
+    return {
+        "index": index,
+        "url": display_url,
+        "sourceUrl": candidate.url,
+        "alt": candidate.alt or "",
+        "width": candidate.width or 0,
+        "height": candidate.height or 0,
+        "text": "",
+        "error": error,
+    }
+
+
+def load_candidate(index: int, candidate: ImageCandidate, page_url: str) -> tuple[int, ImageCandidate, LoadedImage | None, str]:
+    try:
+        return index, candidate, load_image(candidate, page_url), ""
+    except Exception as exc:
+        return index, candidate, None, str(exc)
 
 
 @app.post("/ocr")
@@ -174,14 +231,28 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
     if not payload.images:
         return {"results": []}
 
-    results = []
-    for index, candidate in enumerate(payload.images[:MAX_IMAGES], start=1):
-        display_url = candidate.originalUrl or candidate.linkedUrl or candidate.url
-        try:
-            loaded = load_image(candidate, payload.pageUrl)
-            text = ocr_image(loaded)
-            results.append(
-                {
+    started = time.perf_counter()
+    candidates = list(payload.images[:MAX_IMAGES])
+    results_by_index: dict[int, dict[str, Any]] = {}
+    worker_count = max(1, min(MAX_DOWNLOAD_WORKERS, len(candidates)))
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [
+            executor.submit(load_candidate, index, candidate, payload.pageUrl)
+            for index, candidate in enumerate(candidates, start=1)
+        ]
+
+        for future in as_completed(futures):
+            index, candidate, loaded, error = future.result()
+            if loaded is None:
+                results_by_index[index] = empty_result(index, candidate, error)
+                continue
+
+            ocr_started = time.perf_counter()
+            display_url = candidate.originalUrl or candidate.linkedUrl or candidate.url
+            try:
+                text = ocr_image(loaded)
+                results_by_index[index] = {
                     "index": index,
                     "url": display_url,
                     "sourceUrl": loaded.source_url,
@@ -190,24 +261,19 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
                     "height": candidate.height or 0,
                     "text": text,
                     "error": candidate.fetchError or "",
+                    "loadSeconds": round(loaded.load_seconds, 3),
+                    "ocrSeconds": round(time.perf_counter() - ocr_started, 3),
                 }
-            )
-        except Exception as exc:
-            error = str(exc)
-            if candidate.fetchError:
-                error = f"{candidate.fetchError}; OCR fallback failed: {error}"
+            except Exception as exc:
+                results_by_index[index] = empty_result(index, candidate, str(exc))
 
-            results.append(
-                {
-                    "index": index,
-                    "url": display_url,
-                    "sourceUrl": candidate.url,
-                    "alt": candidate.alt or "",
-                    "width": candidate.width or 0,
-                    "height": candidate.height or 0,
-                    "text": "",
-                    "error": error,
-                }
-            )
-
-    return {"results": results}
+    results = [results_by_index[index] for index in sorted(results_by_index)]
+    return {
+        "results": results,
+        "timing": {
+            "totalSeconds": round(time.perf_counter() - started, 3),
+            "downloadWorkers": worker_count,
+            "easyocrBatchSize": EASYOCR_BATCH_SIZE,
+            "easyocrCanvasSize": EASYOCR_CANVAS_SIZE,
+        },
+    }

@@ -773,7 +773,8 @@ async function enrichPageWithOcr(page, settings, signal) {
   const data = await response.json();
   return {
     ...page,
-    ocrResults: Array.isArray(data.results) ? data.results : []
+    ocrResults: Array.isArray(data.results) ? data.results : [],
+    ocrTiming: data && data.timing ? data.timing : null
   };
 }
 
@@ -912,6 +913,9 @@ function toMarkdown(saved) {
     `- Comment candidates: ${(saved.comments || []).length}`,
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
+    ...(saved.ocrTiming ? [
+      `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
+    ] : []),
     "",
     "## Summary",
     "",
