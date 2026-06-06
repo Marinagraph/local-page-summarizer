@@ -141,7 +141,10 @@ function splitEntriesIntoChunks(entries, maxChars) {
 }
 
 function pageContext(page) {
+  const now = new Date();
   return [
+    `현재 날짜(사용자 PC 기준): ${now.toLocaleDateString("ko-KR")} (${now.toISOString().slice(0, 10)})`,
+    `수집 시각: ${page.collectedAt || now.toISOString()}`,
     `제목: ${page.title || ""}`,
     `URL: ${page.url || ""}`,
     page.description ? `설명: ${page.description}` : "",
@@ -165,7 +168,8 @@ function buildAnalysisSections(page, maxChars) {
       instruction: [
         "본문에서 핵심 주장, 근거, 수치, 맥락, 장점, 단점, 판단 시 주의점을 추출한다.",
         "광고, 메뉴, 중복 문구, 사이트 공통 문구는 버린다.",
-        "커뮤니티 게시글이면 페이지 안에 적힌 주장과 글쓴이의 해석을 구분한다."
+        "커뮤니티 게시글이면 페이지 안에 적힌 주장과 글쓴이의 해석을 구분한다.",
+        "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 가짜나 조작이라고 판정하지 않는다."
       ].join(" "),
       chunks: sourceChunks
     });
@@ -238,6 +242,8 @@ function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) 
         "너는 한국어 개인 리서치 보조자다.",
         "지금은 최종 요약 전 단계로, 페이지의 한 섹션만 분석한다.",
         "원문에 없는 내용을 추정하지 말고, 사실/주장/근거/불확실성을 구분한다.",
+        "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 원문을 가짜나 조작이라고 판정하지 않는다.",
+        "날짜가 미래인지 판단할 때는 [페이지 정보]의 현재 날짜만 기준으로 삼는다.",
         "최종 답변에 바로 재사용할 수 있게 간결하지만 정보 손실을 줄여 정리한다."
       ].join(" ")
     },
@@ -301,6 +307,8 @@ function buildFinalMessages(context, sectionSummaryText) {
         "너는 한국어 개인 리서치 보조자다.",
         "섹션별 사전 분석을 종합해 최종 요약을 작성한다.",
         "원문에 없는 사실을 만들지 말고, 페이지 안의 본문과 댓글 분위기를 근거로 정리한다.",
+        "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 원문을 가짜나 조작이라고 판정하지 않는다.",
+        "날짜가 미래인지 판단할 때는 [페이지 정보]의 현재 날짜만 기준으로 삼는다.",
         "사이트 전체의 정치 성향이나 평판을 일반화해서 경고하지 않는다.",
         "확인 필요 사항은 원문 안의 구체적 주장, 수치, OCR 오독 가능성, 출처 부재에 한정한다.",
         "본문, 댓글, OCR, transcript 중 없는 섹션은 없다고 적고 억지로 채우지 않는다."
@@ -325,6 +333,7 @@ function buildFinalMessages(context, sectionSummaryText) {
         "7. YouTube transcript에서 확인한 내용",
         "8. 구매 또는 판단 시 주의점",
         "   - 특정 사이트의 성향을 이유로 한 일반적 경고는 쓰지 말고, 이 페이지 내용 자체에서 확인해야 할 점만 작성",
+        "   - 모델이 모르는 사건이거나 학습 시점 이후 사건이라는 이유만으로 가짜/조작이라고 쓰지 말 것",
         "9. 출처에서 확인해야 할 부분",
         "",
         "[섹션별 분석]",
@@ -603,6 +612,14 @@ async function enrichPageWithOcr(page, settings, signal) {
 async function prepareImageForOcr(image, signal) {
   const url = image.linkedUrl || image.url;
 
+  if (shouldLetOcrServerFetch(url)) {
+    return {
+      ...image,
+      originalUrl: image.url,
+      url
+    };
+  }
+
   try {
     const response = await fetch(url, {
       signal,
@@ -632,6 +649,10 @@ async function prepareImageForOcr(image, signal) {
       fetchError: error && error.message ? error.message : String(error)
     };
   }
+}
+
+function shouldLetOcrServerFetch(url) {
+  return /\/\/(?:(?:dcimg|image)\d*\.dcinside\.co\.kr|image\.dcinside\.com)\/viewimage(?:pop)?\.php/i.test(String(url || ""));
 }
 
 function blobToDataUrl(blob) {

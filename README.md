@@ -52,6 +52,7 @@ The first run creates `.venv-ocr`, installs Python dependencies, and downloads E
 - If nothing is selected, it summarizes the visible page body.
 - If likely comments are found, the summary asks the model to quote short notable comments for reference.
 - If OCR is enabled, the extension sends up to five large body-image URLs to the local OCR server and adds extracted text to the summary prompt. It prioritizes images inside the main content area and deprioritizes logos, avatars, banners, sidebars, comments, and reply areas.
+- For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.
 - Long collected pages are analyzed in stages. The extension summarizes body text, comment candidates, image OCR, and YouTube transcripts separately, skips sections that are not present, then asks LM Studio for a final combined summary.
 - Long summaries run in a persistent Firefox background script. The popup can close, and you can keep using another browser, VSCode, terminal, or other apps while the job continues.

@@ -47,6 +47,10 @@ const CONTENT_CONTAINER_SELECTORS = [
   ".board_main_view",
   ".read_body",
   ".body_area",
+  ".writing_view_box",
+  ".gallview_contents",
+  ".view_content_wrap",
+  ".con_substance",
   ".write_div",
   ".view_body",
   "#board_read",
@@ -105,7 +109,19 @@ function collectImageCandidates(contentRoot) {
   }
 
   function isLikelyImageUrl(value) {
-    return /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(value);
+    const url = String(value || "");
+    return (
+      /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(url) ||
+      /\/viewimage(?:pop)?\.php(?:\?|$)/i.test(url) ||
+      /\/\/(?:dcimg|image)\d*\.dcinside\.co\.kr\//i.test(url) ||
+      /\/\/image\.dcinside\.com\//i.test(url) ||
+      /\/\/ncache\.ilbe\.com\/files\/attach\//i.test(url)
+    );
+  }
+
+  function imageUrlFromOnclick(value) {
+    const match = String(value || "").match(/imgPop\(['"]([^'"]+)['"]/i);
+    return match ? match[1] : "";
   }
 
   function elementTokenText(element) {
@@ -155,6 +171,9 @@ function collectImageCandidates(contentRoot) {
     if (lowerOcrUrl.includes("/attach/") || lowerOcrUrl.includes("/files/attach/") || lowerOcrUrl.includes("/upload/")) {
       score += 35;
     }
+    if (/\/viewimage(?:pop)?\.php(?:\?|$)/i.test(lowerOcrUrl)) {
+      score += 35;
+    }
 
     if (inNonContentRoot && !inBestContentRoot) score -= 120;
     if (width > 0 && height > 0 && (width < 180 || height < 120)) score -= 80;
@@ -176,7 +195,12 @@ function collectImageCandidates(contentRoot) {
     const width = image.naturalWidth || image.width || 0;
     const height = image.naturalHeight || image.height || 0;
     const lowerSrc = src.toLowerCase();
-    const linkedImage = resolveUrl(image.closest("a")?.href || "");
+    const onclickImage = resolveUrl(
+      imageUrlFromOnclick(image.getAttribute("onclick")) ||
+      imageUrlFromOnclick(image.closest("a")?.getAttribute("onclick")) ||
+      ""
+    );
+    const linkedImage = onclickImage || resolveUrl(image.closest("a")?.href || "");
     const ocrUrl = isLikelyImageUrl(linkedImage) ? linkedImage : src;
 
     if (!src || !ocrUrl || seen.has(ocrUrl)) {
@@ -196,6 +220,7 @@ function collectImageCandidates(contentRoot) {
     candidates.push({
       url: src,
       linkedUrl: isLikelyImageUrl(linkedImage) ? linkedImage : "",
+      pageVisibleUrl: src,
       alt: image.alt || "",
       width,
       height,
@@ -221,12 +246,16 @@ function getBestTextSource() {
     for (const element of document.querySelectorAll(selector)) {
       const text = cleanText(element.innerText || "");
       if (text && !candidates.some((candidate) => candidate.text === text)) {
-        candidates.push({ text, element });
+        candidates.push({
+          text,
+          element,
+          priority: selector === "body" ? 0 : 1
+        });
       }
     }
   }
 
-  candidates.sort((a, b) => b.text.length - a.text.length);
+  candidates.sort((a, b) => (b.priority - a.priority) || (b.text.length - a.text.length));
   return candidates[0] || { text: cleanText(document.body.innerText || "") };
 }
 
