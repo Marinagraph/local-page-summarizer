@@ -46,7 +46,7 @@ Start it with:
 .\scripts\start-ocr-server.ps1
 ```
 
-The first run creates `.venv-ocr`, installs Python dependencies, checks that PyTorch can see a CUDA GPU, and downloads EasyOCR's Korean and English models. The OCR server is GPU-only and fails to start if CUDA is not available. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
+The first run creates `.venv-ocr`, installs CUDA-enabled PyTorch from the PyTorch `cu128` wheel index, installs Python dependencies, checks that PyTorch can see a CUDA GPU, and downloads EasyOCR's Korean and English models. The OCR server is GPU-only and fails to start if CUDA is not available. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
 If an older server is already responding on port 2010 but does not report a CUDA GPU from `/health`, the start script stops that stale process and starts the current GPU OCR server.
 The OCR reader is loaded during server startup so the first page summary does not pay the EasyOCR model-loading cost.
 

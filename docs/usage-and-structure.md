@@ -162,7 +162,7 @@ cd C:\Users\objectives\local-page-summarizer
 .\scripts\start-ocr-server.ps1
 ```
 
-처음 실행하면 `.venv-ocr` 가상환경을 만들고 EasyOCR dependency를 설치한 뒤, PyTorch가 CUDA GPU를 인식하는지 확인하고 EasyOCR 모델을 설치합니다. OCR 서버는 GPU 전용이며 CUDA가 보이지 않으면 시작하지 않습니다. EasyOCR reader는 서버 시작 시 미리 로드되므로 서버 시작은 조금 길어질 수 있지만 첫 요약 작업의 OCR 대기 시간이 줄어듭니다.
+처음 실행하면 `.venv-ocr` 가상환경을 만들고 PyTorch `cu128` wheel index에서 CUDA PyTorch를 명시적으로 설치한 뒤 EasyOCR dependency를 설치합니다. 그 다음 PyTorch가 CUDA GPU를 인식하는지 확인하고 EasyOCR 모델을 설치합니다. OCR 서버는 GPU 전용이며 CUDA가 보이지 않으면 시작하지 않습니다. EasyOCR reader는 서버 시작 시 미리 로드되므로 서버 시작은 조금 길어질 수 있지만 첫 요약 작업의 OCR 대기 시간이 줄어듭니다.
 
 정상 실행 확인:
 

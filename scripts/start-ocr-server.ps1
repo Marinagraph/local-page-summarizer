@@ -5,6 +5,8 @@ $venv = Join-Path $root ".venv-ocr"
 $python = Join-Path $venv "Scripts\python.exe"
 $ocrPort = 2010
 $healthUrl = "http://127.0.0.1:2010/health"
+$torchIndexUrl = "https://download.pytorch.org/whl/cu128"
+$torchPackages = @("torch==2.11.0+cu128", "torchvision==0.26.0+cu128")
 
 function Stop-StaleOcrServer {
   $connections = @(Get-NetTCPConnection -LocalPort $ocrPort -State Listen -ErrorAction SilentlyContinue)
@@ -76,6 +78,7 @@ if (-not (Test-Path $python)) {
 }
 
 & $python -m pip install --upgrade pip
+& $python -m pip install --upgrade --index-url $torchIndexUrl @torchPackages
 & $python -m pip install -r (Join-Path $root "ocr-server\requirements.txt")
 
 $gpuName = & $python -c "import sys, torch; available=torch.cuda.is_available(); print(torch.cuda.get_device_name(0) if available else 'NO_CUDA_GPU'); sys.exit(0 if available else 1)"
