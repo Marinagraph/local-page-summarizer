@@ -187,6 +187,37 @@ function collectImageCandidates(contentRoot) {
   const seen = new Set();
   const candidates = [];
 
+  function isUsableImageRoot(element) {
+    return Boolean(
+      element &&
+      element !== document.body &&
+      !element.closest(NON_CONTENT_CONTAINER_SELECTOR) &&
+      element.querySelector("img")
+    );
+  }
+
+  function collectImageRoots() {
+    if (isUsableImageRoot(contentRoot)) {
+      return [contentRoot];
+    }
+
+    const roots = [];
+    for (const selector of CONTENT_CONTAINER_SELECTORS) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (!isUsableImageRoot(element)) {
+          continue;
+        }
+        if (roots.some((root) => root === element || root.contains(element) || element.contains(root))) {
+          continue;
+        }
+
+        roots.push(element);
+      }
+    }
+
+    return roots;
+  }
+
   function firstSrcFromSrcset(srcset) {
     return (srcset || "").split(",")[0].trim().split(/\s+/)[0] || "";
   }
@@ -289,53 +320,58 @@ function collectImageCandidates(contentRoot) {
     return score;
   }
 
-  for (const image of document.querySelectorAll("img")) {
-    const src = resolveUrl(
-      image.getAttribute("data-original") ||
-      image.getAttribute("data-src") ||
-      image.getAttribute("data-lazy-src") ||
-      image.getAttribute("data-url") ||
-      firstSrcFromSrcset(image.getAttribute("srcset")) ||
-      image.currentSrc ||
-      image.src
-    );
-    const width = image.naturalWidth || image.width || 0;
-    const height = image.naturalHeight || image.height || 0;
-    const lowerSrc = src.toLowerCase();
-    const onclickImage = resolveUrl(
-      imageUrlFromOnclick(image.getAttribute("onclick")) ||
-      imageUrlFromOnclick(image.closest("a")?.getAttribute("onclick")) ||
-      ""
-    );
-    const linkedImage = onclickImage || resolveUrl(image.closest("a")?.href || "");
-    const ocrUrl = isLikelyImageUrl(linkedImage) ? linkedImage : src;
+  for (const root of collectImageRoots()) {
+    for (const image of root.querySelectorAll("img")) {
+      const src = resolveUrl(
+        image.getAttribute("data-original") ||
+        image.getAttribute("data-src") ||
+        image.getAttribute("data-lazy-src") ||
+        image.getAttribute("data-url") ||
+        firstSrcFromSrcset(image.getAttribute("srcset")) ||
+        image.currentSrc ||
+        image.src
+      );
+      const width = image.naturalWidth || image.width || 0;
+      const height = image.naturalHeight || image.height || 0;
+      const lowerSrc = src.toLowerCase();
+      const onclickImage = resolveUrl(
+        imageUrlFromOnclick(image.getAttribute("onclick")) ||
+        imageUrlFromOnclick(image.closest("a")?.getAttribute("onclick")) ||
+        ""
+      );
+      const linkedImage = onclickImage || resolveUrl(image.closest("a")?.href || "");
+      const ocrUrl = isLikelyImageUrl(linkedImage) ? linkedImage : src;
 
-    if (!src || !ocrUrl || seen.has(ocrUrl)) {
-      continue;
-    }
-    if (isYouTubeThumbnailUrl(src) || isYouTubeThumbnailUrl(linkedImage) || isYouTubeThumbnailUrl(ocrUrl)) {
-      continue;
-    }
-    if ((width < 300 || height < 180) && !isLikelyImageUrl(src) && !isLikelyImageUrl(linkedImage)) {
-      continue;
-    }
-    if (isDecorativeImage(src, image)) {
-      continue;
-    }
-    if (lowerSrc.endsWith(".svg") || lowerSrc.startsWith("blob:")) {
-      continue;
-    }
+      if (image.closest(NON_CONTENT_CONTAINER_SELECTOR)) {
+        continue;
+      }
+      if (!src || !ocrUrl || seen.has(ocrUrl)) {
+        continue;
+      }
+      if (isYouTubeThumbnailUrl(src) || isYouTubeThumbnailUrl(linkedImage) || isYouTubeThumbnailUrl(ocrUrl)) {
+        continue;
+      }
+      if ((width < 300 || height < 180) && !isLikelyImageUrl(src) && !isLikelyImageUrl(linkedImage)) {
+        continue;
+      }
+      if (isDecorativeImage(src, image)) {
+        continue;
+      }
+      if (lowerSrc.endsWith(".svg") || lowerSrc.startsWith("blob:")) {
+        continue;
+      }
 
-    seen.add(ocrUrl);
-    candidates.push({
-      url: src,
-      linkedUrl: isLikelyImageUrl(linkedImage) ? linkedImage : "",
-      pageVisibleUrl: src,
-      alt: image.alt || "",
-      width,
-      height,
-      score: scoreImage(image, src, linkedImage, width, height)
-    });
+      seen.add(ocrUrl);
+      candidates.push({
+        url: src,
+        linkedUrl: isLikelyImageUrl(linkedImage) ? linkedImage : "",
+        pageVisibleUrl: src,
+        alt: image.alt || "",
+        width,
+        height,
+        score: scoreImage(image, src, linkedImage, width, height)
+      });
+    }
   }
 
   return candidates

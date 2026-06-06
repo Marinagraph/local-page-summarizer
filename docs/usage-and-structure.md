@@ -54,7 +54,7 @@ dist\
 : Firefox 툴바 버튼을 눌렀을 때 열리는 팝업 UI입니다. 모델명, 최대 청크 크기, OCR 사용 여부, OCR endpoint를 설정하고 작업 시작/상태 표시/Markdown 내보내기를 담당합니다. 긴 요약 작업 자체는 popup에서 돌리지 않습니다.
 
 `contentScript.js`
-: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 렌더링된 댓글 행을 우선 수집하고, 실패하면 보이는 `전체 댓글 ...개` 텍스트 구간을 파싱합니다. 이미지 후보는 본문 영역의 이미지를 우선하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 낮은 우선순위로 처리합니다.
+: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 렌더링된 댓글 행을 우선 수집하고, 실패하면 보이는 `전체 댓글 ...개` 텍스트 구간을 파싱합니다. 이미지 후보는 감지된 본문 컨테이너 안에서만 수집하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 제외합니다.
 
 `background.js`
 : 핵심 작업자입니다. popup에서 요청을 받으면 현재 탭에서 수집한 데이터를 받아 OCR 서버와 LM Studio를 호출하고, 결과를 `browser.storage.local`에 저장한 뒤 Markdown 파일을 다운로드합니다.
@@ -147,7 +147,7 @@ qwen
 : 동시에 실행할 LM Studio 분석 호출 수입니다. 기본값은 `2`입니다. LM Studio 슬롯과 GPU 여유가 충분하면 `3` 또는 `4`를 시도할 수 있고, PC가 버거우면 `1`로 낮춥니다. 최종 종합 요약은 모든 섹션 분석이 끝난 뒤 한 번만 실행됩니다.
 
 `OCR images`
-: 켜면 본문 이미지 후보를 OCR 서버로 보냅니다. 꺼두면 OCR 서버를 호출하지 않습니다.
+: 켜면 감지된 본문 컨테이너 안의 이미지 후보를 OCR 서버로 보냅니다. 꺼두면 OCR 서버를 호출하지 않습니다.
 
 `OCR endpoint`
 : 기본값은 다음과 같습니다.
@@ -234,7 +234,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.15.xpi
+dist\local-page-summarizer-0.3.16.xpi
 ```
 
 ## 개발 검증
@@ -268,7 +268,7 @@ git diff --check
 : OCR은 GPU 전용입니다. `.venv-ocr` 안의 PyTorch가 CUDA GPU를 인식해야 합니다. CUDA 지원 PyTorch를 설치하거나 CUDA GPU가 있는 환경에서 실행합니다.
 
 `OCR 결과가 엉뚱한 이미지로 나옴`
-: 최신 버전에서는 본문 이미지 우선순위를 높였습니다. 그래도 사이트 구조가 특이하면 본문 이미지가 아닌 이미지가 섞일 수 있습니다. 이 경우 해당 사이트의 본문 컨테이너 selector를 `contentScript.js`의 `CONTENT_CONTAINER_SELECTORS`에 추가합니다.
+: 최신 버전에서는 감지된 본문 컨테이너 안의 이미지만 OCR 후보로 수집합니다. 사이트 구조가 특이해서 본문 이미지를 못 찾으면 해당 사이트의 본문 컨테이너 selector를 `contentScript.js`의 `CONTENT_CONTAINER_SELECTORS`에 추가합니다.
 
 `DCInside 이미지 fetch failed: 403`
 : 디시 이미지는 직접 접근이 막히는 경우가 많습니다. 최신 버전은 OCR 서버가 `Referer`를 붙여 가져오게 처리합니다. OCR 서버가 실행 중인지 먼저 확인합니다.

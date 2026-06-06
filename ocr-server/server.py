@@ -18,7 +18,7 @@ from pydantic import BaseModel
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 IMAGE_SNIFF_BYTES = 16
-OCR_SERVER_VERSION = "0.3.15"
+OCR_SERVER_VERSION = "0.3.16"
 
 app = FastAPI(title="Local Page Summarizer OCR")
 app.add_middleware(
