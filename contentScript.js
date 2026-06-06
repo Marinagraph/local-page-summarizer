@@ -215,6 +215,14 @@ function collectImageCandidates(contentRoot) {
     );
   }
 
+  function isYouTubeThumbnailUrl(value) {
+    try {
+      return new URL(value, location.href).hostname === "i.ytimg.com";
+    } catch {
+      return /\/\/i\.ytimg\.com\//i.test(String(value || ""));
+    }
+  }
+
   function imageUrlFromOnclick(value) {
     const match = String(value || "").match(/imgPop\(['"]([^'"]+)['"]/i);
     return match ? match[1] : "";
@@ -305,6 +313,9 @@ function collectImageCandidates(contentRoot) {
     if (!src || !ocrUrl || seen.has(ocrUrl)) {
       continue;
     }
+    if (isYouTubeThumbnailUrl(src) || isYouTubeThumbnailUrl(linkedImage) || isYouTubeThumbnailUrl(ocrUrl)) {
+      continue;
+    }
     if ((width < 300 || height < 180) && !isLikelyImageUrl(src) && !isLikelyImageUrl(linkedImage)) {
       continue;
     }
@@ -358,8 +369,12 @@ function getBestTextSource() {
   return candidates[0] || { text: cleanText(document.body.innerText || "") };
 }
 
+function isYouTubePage() {
+  return /(^|\.)youtube\.com$/i.test(location.hostname) || /(^|\.)youtu\.be$/i.test(location.hostname);
+}
+
 function collectYouTubeTranscript() {
-  if (!location.hostname.includes("youtube.com")) {
+  if (!isYouTubePage()) {
     return { text: "", segments: [] };
   }
 
@@ -404,6 +419,7 @@ function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const bestSource = getBestTextSource();
   const text = cleanText(selection || bestSource.text || document.body.innerText || "");
+  const transcript = collectYouTubeTranscript();
 
   return {
     title: document.title || location.href,
@@ -411,8 +427,8 @@ function collectPage() {
     description: getMetaDescription(),
     text,
     comments: collectLikelyComments(text),
-    images: collectImageCandidates(bestSource.element),
-    transcript: collectYouTubeTranscript(),
+    images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
+    transcript,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };
