@@ -1,0 +1,10 @@
+easyocr==1.7.2
+pillow==11.1.0
+requests==2.32.3
+numpy
+accelerate
+safetensors
+sentencepiece
+protobuf
+hf_xet
+transformers>=5.0.0

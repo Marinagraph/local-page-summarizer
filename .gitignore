@@ -1,6 +1,7 @@
 dist/
 web-ext-artifacts/
 .venv-ocr/
+.venv-ocr-bench/
 __pycache__/
 *.zip
 *.xpi
