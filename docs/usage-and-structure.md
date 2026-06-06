@@ -176,7 +176,7 @@ curl http://127.0.0.1:2010/health
 {"status":"ok","gpu":"cuda:..."}
 ```
 
-이미 2010 포트를 쓰는 서버가 있으면 새 OCR 서버가 뜨지 않습니다. 이 경우 기존 터미널에서 이미 실행 중인 OCR 서버를 그대로 사용하면 됩니다.
+이미 2010 포트를 쓰는 서버가 있고 `/health` 응답에 CUDA GPU 정보가 없으면 `scripts\start-ocr-server.ps1`가 오래된 OCR 서버 프로세스를 종료하고 최신 GPU OCR 서버를 다시 시작합니다. 정상 GPU OCR 서버가 이미 실행 중이면 그대로 재사용합니다.
 
 OCR 서버는 CPU fallback을 허용하지 않습니다. CUDA GPU가 보이지 않으면 시작 단계에서 실패합니다.
 
@@ -231,7 +231,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.10.xpi
+dist\local-page-summarizer-0.3.11.xpi
 ```
 
 ## 개발 검증

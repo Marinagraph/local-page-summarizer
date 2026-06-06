@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import os
-from typing import Any
+from typing import Any, NamedTuple
 
 import easyocr
 import numpy as np
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+IMAGE_SNIFF_BYTES = 16
 
 app = FastAPI(title="Local Page Summarizer OCR")
 app.add_middleware(
@@ -27,6 +28,11 @@ app.add_middleware(
 )
 
 reader: easyocr.Reader | None = None
+
+
+class LoadedImage(NamedTuple):
+    raw: bytes
+    content_type: str
 
 
 class ImageCandidate(BaseModel):
@@ -72,8 +78,18 @@ def validate_gpu_on_startup() -> None:
     get_reader()
 
 
-def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:
+def describe_bytes(raw: bytes) -> str:
+    return f"bytes={len(raw)}, head={raw[:IMAGE_SNIFF_BYTES].hex()}"
+
+
+def looks_like_html_or_json(raw: bytes) -> bool:
+    prefix = raw[:256].lstrip().lower()
+    return prefix.startswith((b"<!doctype", b"<html", b"<head", b"<body", b"{", b"["))
+
+
+def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
     url = candidate.url
+    content_type = "data:image"
     if url.startswith("data:image/"):
         try:
             _, encoded = url.split(",", 1)
@@ -95,14 +111,25 @@ def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:
         )
         response.raise_for_status()
         raw = response.content
+        content_type = response.headers.get("content-type", "")
 
     if len(raw) > MAX_IMAGE_BYTES:
-        raise ValueError("image is too large")
-    return raw
+        raise ValueError(f"image is too large ({describe_bytes(raw)})")
+
+    if looks_like_html_or_json(raw):
+        raise ValueError(f"non-image response ({content_type or 'unknown'}, {describe_bytes(raw)})")
+
+    return LoadedImage(raw=raw, content_type=content_type)
 
 
-def ocr_image(raw: bytes) -> str:
-    image = Image.open(io.BytesIO(raw)).convert("RGB")
+def ocr_image(loaded: LoadedImage) -> str:
+    try:
+        image = Image.open(io.BytesIO(loaded.raw)).convert("RGB")
+    except Exception as exc:
+        raise ValueError(
+            f"cannot identify image file ({loaded.content_type or 'unknown'}, {describe_bytes(loaded.raw)})"
+        ) from exc
+
     result: list[Any] = get_reader().readtext(np.array(image))
     lines = [str(item[1]).strip() for item in result if len(item) >= 2 and str(item[1]).strip()]
     return "\n".join(lines)
@@ -122,8 +149,8 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
     for index, candidate in enumerate(payload.images[:MAX_IMAGES], start=1):
         display_url = candidate.originalUrl or candidate.linkedUrl or candidate.url
         try:
-            raw = load_image_bytes(candidate, payload.pageUrl)
-            text = ocr_image(raw)
+            loaded = load_image(candidate, payload.pageUrl)
+            text = ocr_image(loaded)
             results.append(
                 {
                     "index": index,

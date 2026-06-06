@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Local Page Summarizer",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Save the current page and summarize it with LM Studio running locally.",
   "permissions": [
     "activeTab",

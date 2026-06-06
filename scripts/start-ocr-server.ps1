@@ -3,24 +3,49 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $venv = Join-Path $root ".venv-ocr"
 $python = Join-Path $venv "Scripts\python.exe"
+$ocrPort = 2010
 $healthUrl = "http://127.0.0.1:2010/health"
 
+function Stop-StaleOcrServer {
+  $connections = @(Get-NetTCPConnection -LocalPort $ocrPort -State Listen -ErrorAction SilentlyContinue)
+  $processIds = @($connections | Select-Object -ExpandProperty OwningProcess -Unique | Where-Object { $_ -and $_ -gt 0 })
+
+  if (-not $processIds.Count) {
+    throw "An old OCR server is responding at $healthUrl, but no listening process was found on port $ocrPort."
+  }
+
+  foreach ($processId in $processIds) {
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    $processName = if ($process) { $process.ProcessName } else { "unknown" }
+    Write-Warning "Stopping stale OCR server process $processId ($processName) on port $ocrPort."
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+  }
+
+  Start-Sleep -Milliseconds 800
+}
+
+$health = $null
 try {
   $health = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
-  if ($health.StatusCode -eq 200) {
-    $healthBody = $health.Content | ConvertFrom-Json
-    if ($healthBody.gpu -and "$($healthBody.gpu)".StartsWith("cuda:")) {
-      Write-Host "GPU OCR server is already running at $healthUrl ($($healthBody.gpu))"
-      exit 0
-    }
-
-    throw "An OCR server is already running at $healthUrl, but it is not reporting a CUDA GPU. Stop the old server and start it again."
-  }
 } catch {
-  if ($_.Exception.Message -like "*already running*") {
-    throw
-  }
   # Server is not running yet.
+}
+
+if ($health -and $health.StatusCode -eq 200) {
+  $healthBody = $null
+  try {
+    $healthBody = $health.Content | ConvertFrom-Json
+  } catch {
+    # Treat unknown health responses as stale servers on the OCR port.
+  }
+
+  if ($healthBody -and $healthBody.gpu -and "$($healthBody.gpu)".StartsWith("cuda:")) {
+    Write-Host "GPU OCR server is already running at $healthUrl ($($healthBody.gpu))"
+    exit 0
+  }
+
+  Write-Warning "A server is already running at $healthUrl, but it is not the current GPU OCR server. Restarting it."
+  Stop-StaleOcrServer
 }
 
 function Get-BasePython {
