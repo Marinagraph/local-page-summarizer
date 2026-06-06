@@ -3,9 +3,9 @@ const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
-const SECTION_SUMMARY_MAX_TOKENS = 650;
-const SECTION_MERGE_MAX_TOKENS = 850;
-const SUMMARY_MAX_TOKENS = 1100;
+const SECTION_SUMMARY_MAX_TOKENS = 520;
+const SECTION_MERGE_MAX_TOKENS = 650;
+const SUMMARY_MAX_TOKENS = 950;
 const SECTION_MERGE_SKIP_RATIO = 0.45;
 const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
 const MAX_LM_STUDIO_CONCURRENCY = 4;
@@ -291,6 +291,61 @@ function buildAnalysisSections(page, maxChars) {
   return sections;
 }
 
+function sectionSummaryMaxTokens(section) {
+  if (!section || !section.key) {
+    return SECTION_SUMMARY_MAX_TOKENS;
+  }
+
+  if (section.key === "comments") {
+    return 560;
+  }
+
+  if (section.key === "ocr") {
+    return 380;
+  }
+
+  if (section.key === "transcript") {
+    return 480;
+  }
+
+  return SECTION_SUMMARY_MAX_TOKENS;
+}
+
+function sectionOutputRules(section) {
+  if (section && section.key === "comments") {
+    return [
+      "출력은 8줄 이내의 bullet로 제한한다.",
+      "반응의 큰 흐름, 반복되는 논쟁점, 반대 의견, 눈여겨볼 댓글만 남긴다.",
+      "눈여겨볼 댓글은 짧은 원문 인용 3~5개만 포함한다.",
+      "댓글을 모두 읽되, 비슷한 댓글은 묶어서 압축한다."
+    ];
+  }
+
+  if (section && section.key === "ocr") {
+    return [
+      "출력은 6줄 이내의 bullet로 제한한다.",
+      "이미지에서 새로 확인되는 텍스트, 수치, 표, 기사 캡처 내용만 남긴다.",
+      "본문과 중복되거나 OCR 신뢰도가 낮은 파편은 길게 설명하지 않는다.",
+      "불확실한 항목은 'OCR 불확실'이라고 짧게 표시한다."
+    ];
+  }
+
+  if (section && section.key === "transcript") {
+    return [
+      "출력은 7줄 이내의 bullet로 제한한다.",
+      "영상 흐름, 핵심 주장, 근거, 인용 가치가 있는 발언만 남긴다.",
+      "반복 발언과 진행 멘트는 묶어서 압축한다."
+    ];
+  }
+
+  return [
+    "출력은 7줄 이내의 bullet로 제한한다.",
+    "핵심 주장, 근거/수치, 판단 시 주의점만 남긴다.",
+    "장점/단점 항목을 억지로 분리하지 말고, 최종 요약에 필요한 재료만 압축한다.",
+    "원문 문장을 길게 다시 쓰지 않는다."
+  ];
+}
+
 function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) {
   return [
     {
@@ -301,7 +356,7 @@ function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) 
         "원문에 없는 내용을 추정하지 말고, 사실/주장/근거/불확실성을 구분한다.",
         "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 원문을 가짜나 조작이라고 판정하지 않는다.",
         "날짜가 미래인지 판단할 때는 [페이지 정보]의 현재 날짜만 기준으로 삼는다.",
-        "최종 답변에 바로 재사용할 수 있게 간결하지만 정보 손실을 줄여 정리한다."
+        "최종 답변에 바로 재사용할 수 있는 재료만 남기고, 중간 분석 자체를 길게 쓰지 않는다."
       ].join(" ")
     },
     {
@@ -314,12 +369,8 @@ function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) 
         `청크: ${chunkIndex + 1}/${totalChunks}`,
         section.instruction,
         "",
-        "출력 형식:",
-        "- 핵심 내용",
-        "- 근거/수치/인용",
-        "- 장점 또는 긍정 신호",
-        "- 단점 또는 위험 신호",
-        "- 확인 필요 사항",
+        "출력 규칙:",
+        ...sectionOutputRules(section),
         "",
         "[원문]",
         chunk
@@ -335,7 +386,8 @@ function buildSectionMergeMessages(context, section, summaryText) {
       content: [
         "너는 한국어 개인 리서치 보조자다.",
         "같은 섹션을 여러 청크로 분석한 결과를 하나로 병합한다.",
-        "중복을 제거하되, 서로 다른 근거와 중요한 반응은 잃지 않는다."
+        "중복을 제거하되, 서로 다른 근거와 중요한 반응은 잃지 않는다.",
+        "최종 요약 입력용 재료만 남기고 10줄 이내로 압축한다."
       ].join(" ")
     },
     {
@@ -349,6 +401,7 @@ function buildSectionMergeMessages(context, section, summaryText) {
         "",
         "아래 청크별 분석을 하나의 섹션 분석으로 병합해줘.",
         "짧은 인용은 유지하되 너무 긴 원문 복사는 하지 마.",
+        "최종 답변 형식으로 꾸미지 말고 핵심 재료만 bullet로 남겨줘.",
         "",
         summaryText
       ].join("\n")
@@ -600,7 +653,7 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
       chunk,
       signal,
       maxChars,
-      SECTION_SUMMARY_MAX_TOKENS,
+      sectionSummaryMaxTokens(section),
       (content) => buildSectionMessages(context, section, content, index, section.chunks.length),
       (task) => scheduleRequest(async () => {
         if (report) {
