@@ -8,10 +8,18 @@ $healthUrl = "http://127.0.0.1:2010/health"
 try {
   $health = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 2
   if ($health.StatusCode -eq 200) {
-    Write-Host "OCR server is already running at $healthUrl"
-    exit 0
+    $healthBody = $health.Content | ConvertFrom-Json
+    if ($healthBody.gpu -and "$($healthBody.gpu)".StartsWith("cuda:")) {
+      Write-Host "GPU OCR server is already running at $healthUrl ($($healthBody.gpu))"
+      exit 0
+    }
+
+    throw "An OCR server is already running at $healthUrl, but it is not reporting a CUDA GPU. Stop the old server and start it again."
   }
 } catch {
+  if ($_.Exception.Message -like "*already running*") {
+    throw
+  }
   # Server is not running yet.
 }
 
@@ -45,5 +53,12 @@ if (-not (Test-Path $python)) {
 & $python -m pip install --upgrade pip
 & $python -m pip install -r (Join-Path $root "ocr-server\requirements.txt")
 
+$gpuName = & $python -c "import sys, torch; available=torch.cuda.is_available(); print(torch.cuda.get_device_name(0) if available else 'NO_CUDA_GPU'); sys.exit(0 if available else 1)"
+if ($LASTEXITCODE -ne 0) {
+  throw "OCR requires a CUDA GPU. Install a CUDA-enabled PyTorch build in .venv-ocr or run on a CUDA-capable machine."
+}
+
+Write-Host "OCR GPU: $gpuName"
+$env:OCR_GPU = "1"
 $env:PYTHONPATH = Join-Path $root "ocr-server"
 & $python -m uvicorn server:app --host 127.0.0.1 --port 2010

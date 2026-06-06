@@ -8,6 +8,7 @@ from typing import Any
 import easyocr
 import numpy as np
 import requests
+import torch
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -46,9 +47,29 @@ class OcrRequest(BaseModel):
 def get_reader() -> easyocr.Reader:
     global reader
     if reader is None:
-      gpu = os.environ.get("OCR_GPU", "0") == "1"
-      reader = easyocr.Reader(["ko", "en"], gpu=gpu)
+        require_gpu()
+        reader = easyocr.Reader(["ko", "en"], gpu=True)
     return reader
+
+
+def gpu_name() -> str:
+    if torch.cuda.is_available():
+        return f"cuda:{torch.cuda.get_device_name(0)}"
+
+    return ""
+
+
+def require_gpu() -> None:
+    if not gpu_name():
+        raise RuntimeError(
+            "OCR GPU is required, but no CUDA GPU is available to PyTorch. "
+            "Install a CUDA-enabled PyTorch build or run on a machine with CUDA."
+        )
+
+
+@app.on_event("startup")
+def validate_gpu_on_startup() -> None:
+    require_gpu()
 
 
 def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:
@@ -85,7 +106,7 @@ def ocr_image(raw: bytes) -> str:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "gpu": gpu_name()}
 
 
 @app.post("/ocr")

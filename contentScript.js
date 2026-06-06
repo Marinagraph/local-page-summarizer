@@ -31,10 +31,6 @@ function collectLikelyComments() {
 
       seen.add(text);
       comments.push(text);
-
-      if (comments.length >= 80) {
-        return comments;
-      }
     }
   }
 

@@ -80,6 +80,8 @@ dist\
 OCR을 쓸 때만 필요:
 
 - Python 3.11
+- CUDA-capable GPU
+- CUDA-enabled PyTorch build
 - OCR 서버 실행 터미널
 
 LM Studio 서버 endpoint는 다음과 같아야 합니다.
@@ -160,7 +162,7 @@ cd C:\Users\objectives\local-page-summarizer
 .\scripts\start-ocr-server.ps1
 ```
 
-처음 실행하면 `.venv-ocr` 가상환경을 만들고 EasyOCR dependency와 모델을 설치합니다. 이 과정은 시간이 걸릴 수 있습니다.
+처음 실행하면 `.venv-ocr` 가상환경을 만들고 EasyOCR dependency를 설치한 뒤, PyTorch가 CUDA GPU를 인식하는지 확인하고 EasyOCR 모델을 설치합니다. OCR 서버는 GPU 전용이며 CUDA가 보이지 않으면 시작하지 않습니다. 이 과정은 시간이 걸릴 수 있습니다.
 
 정상 실행 확인:
 
@@ -171,10 +173,12 @@ curl http://127.0.0.1:2010/health
 예상 응답:
 
 ```json
-{"status":"ok"}
+{"status":"ok","gpu":"cuda:..."}
 ```
 
 이미 2010 포트를 쓰는 서버가 있으면 새 OCR 서버가 뜨지 않습니다. 이 경우 기존 터미널에서 이미 실행 중인 OCR 서버를 그대로 사용하면 됩니다.
+
+OCR 서버는 CPU fallback을 허용하지 않습니다. CUDA GPU가 보이지 않으면 시작 단계에서 실패합니다.
 
 ## DCInside 이미지 처리
 
@@ -227,7 +231,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.7.xpi
+dist\local-page-summarizer-0.3.8.xpi
 ```
 
 ## 개발 검증
@@ -257,6 +261,9 @@ git diff --check
 `LM Studio 요청 실패: context length`
 : `Max chars`를 낮추거나 LM Studio에서 모델 context length를 키웁니다. 확장은 자동 재시도를 하지만, 모델 context가 너무 작고 페이지가 매우 길면 실패할 수 있습니다.
 
+`OCR 서버가 CUDA GPU 오류로 시작되지 않음`
+: OCR은 GPU 전용입니다. `.venv-ocr` 안의 PyTorch가 CUDA GPU를 인식해야 합니다. CUDA 지원 PyTorch를 설치하거나 CUDA GPU가 있는 환경에서 실행합니다.
+
 `OCR 결과가 엉뚱한 이미지로 나옴`
 : 최신 버전에서는 본문 이미지 우선순위를 높였습니다. 그래도 사이트 구조가 특이하면 본문 이미지가 아닌 이미지가 섞일 수 있습니다. 이 경우 해당 사이트의 본문 컨테이너 selector를 `contentScript.js`의 `CONTENT_CONTAINER_SELECTORS`에 추가합니다.
 
@@ -275,4 +282,6 @@ git diff --check
 - content script는 페이지 수집만 담당합니다.
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
+- OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. 페이지네이션 뒤쪽 댓글을 자동으로 가져오지는 않습니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.

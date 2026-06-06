@@ -9,7 +9,7 @@ Detailed file structure and usage notes are in [`docs/usage-and-structure.md`](d
 - Firefox
 - LM Studio local server running at `http://127.0.0.1:2000`
 - A loaded model in LM Studio
-- Python 3.11 for the optional OCR server
+- Python 3.11 and a CUDA-capable GPU for the optional OCR server
 
 ## Load in Firefox
 
@@ -46,13 +46,13 @@ Start it with:
 .\scripts\start-ocr-server.ps1
 ```
 
-The first run creates `.venv-ocr`, installs Python dependencies, and downloads EasyOCR's Korean and English models. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
+The first run creates `.venv-ocr`, installs Python dependencies, checks that PyTorch can see a CUDA GPU, and downloads EasyOCR's Korean and English models. The OCR server is GPU-only and fails to start if CUDA is not available. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
 
 ## Notes
 
 - If text is selected on the page, the extension summarizes the selected text.
 - If nothing is selected, it summarizes the visible page body.
-- If likely comments are found, the summary asks the model to quote short notable comments for reference.
+- If likely comments are found, all currently visible comment candidates are analyzed. The extension does not fetch additional paginated comment pages.
 - If OCR is enabled, the extension sends up to five large body-image URLs to the local OCR server and adds extracted text to the summary prompt. It prioritizes images inside the main content area and deprioritizes logos, avatars, banners, sidebars, comments, and reply areas.
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.

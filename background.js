@@ -176,7 +176,7 @@ function buildAnalysisSections(page, maxChars) {
   }
 
   if (Array.isArray(page.comments) && page.comments.length) {
-    const commentEntries = page.comments.slice(0, 120).map((comment, index) => (
+    const commentEntries = page.comments.map((comment, index) => (
       `${index + 1}. ${clampText(comment, 1200)}`
     ));
     const commentChunks = splitEntriesIntoChunks(commentEntries, maxChars);
