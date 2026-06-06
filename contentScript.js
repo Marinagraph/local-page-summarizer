@@ -41,9 +41,52 @@ function collectLikelyComments() {
   return comments;
 }
 
-function collectImageCandidates() {
+const CONTENT_CONTAINER_SELECTORS = [
+  ".view_content",
+  ".article_content",
+  ".board_main_view",
+  ".read_body",
+  ".body_area",
+  ".write_div",
+  ".view_body",
+  "#board_read",
+  ".post-content",
+  ".post_content",
+  ".xe_content",
+  ".rd_body",
+  ".read_content",
+  ".article_view",
+  ".post_view",
+  ".content_view",
+  "article",
+  "main",
+  "[role='main']"
+];
+
+const NON_CONTENT_CONTAINER_SELECTOR = [
+  "header",
+  "nav",
+  "footer",
+  "aside",
+  "[class*='sidebar' i]",
+  "[id*='sidebar' i]",
+  "[class*='banner' i]",
+  "[id*='banner' i]",
+  "[class*='advert' i]",
+  "[id*='advert' i]",
+  "[class*='profile' i]",
+  "[id*='profile' i]",
+  "[class*='avatar' i]",
+  "[id*='avatar' i]",
+  "[class*='comment' i]",
+  "[id*='comment' i]",
+  "[class*='reply' i]",
+  "[id*='reply' i]"
+].join(",");
+
+function collectImageCandidates(contentRoot) {
   const seen = new Set();
-  const images = [];
+  const candidates = [];
 
   function firstSrcFromSrcset(srcset) {
     return (srcset || "").split(",")[0].trim().split(/\s+/)[0] || "";
@@ -65,6 +108,61 @@ function collectImageCandidates() {
     return /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(value);
   }
 
+  function elementTokenText(element) {
+    return [
+      element.id || "",
+      element.className || "",
+      element.getAttribute("role") || "",
+      element.closest("a")?.className || "",
+      element.closest("a")?.id || ""
+    ].join(" ").toLowerCase();
+  }
+
+  function isDecorativeImage(src, image) {
+    const lowerSrc = String(src || "").toLowerCase();
+    const tokenText = elementTokenText(image);
+    return (
+      lowerSrc.includes("logo") ||
+      lowerSrc.includes("avatar") ||
+      lowerSrc.includes("profile") ||
+      lowerSrc.includes("emoji") ||
+      lowerSrc.includes("sprite") ||
+      lowerSrc.includes("icon") ||
+      tokenText.includes("logo") ||
+      tokenText.includes("avatar") ||
+      tokenText.includes("profile") ||
+      tokenText.includes("emoji") ||
+      tokenText.includes("icon")
+    );
+  }
+
+  function scoreImage(image, src, linkedImage, width, height) {
+    const inBestContentRoot = Boolean(contentRoot && contentRoot !== document.body && contentRoot.contains(image));
+    const inKnownContentRoot = Boolean(image.closest(CONTENT_CONTAINER_SELECTORS.join(",")));
+    const inNonContentRoot = Boolean(image.closest(NON_CONTENT_CONTAINER_SELECTOR));
+    const lowerOcrUrl = String(linkedImage || src || "").toLowerCase();
+    const area = width * height;
+    let score = 0;
+
+    if (inBestContentRoot) score += 120;
+    if (inKnownContentRoot) score += 80;
+    if (isLikelyImageUrl(linkedImage)) score += 30;
+    if (isLikelyImageUrl(src)) score += 20;
+    if (width >= 500) score += 15;
+    if (height >= 300) score += 15;
+    if (area >= 200000) score += 25;
+    if (image.alt && image.alt.length > 4) score += 5;
+    if (lowerOcrUrl.includes("/attach/") || lowerOcrUrl.includes("/files/attach/") || lowerOcrUrl.includes("/upload/")) {
+      score += 35;
+    }
+
+    if (inNonContentRoot && !inBestContentRoot) score -= 120;
+    if (width > 0 && height > 0 && (width < 180 || height < 120)) score -= 80;
+    if (isDecorativeImage(src, image)) score -= 120;
+
+    return score;
+  }
+
   for (const image of document.querySelectorAll("img")) {
     const src = resolveUrl(
       image.currentSrc ||
@@ -79,50 +177,42 @@ function collectImageCandidates() {
     const height = image.naturalHeight || image.height || 0;
     const lowerSrc = src.toLowerCase();
     const linkedImage = resolveUrl(image.closest("a")?.href || "");
+    const ocrUrl = isLikelyImageUrl(linkedImage) ? linkedImage : src;
 
-    if (!src || seen.has(src)) {
+    if (!src || !ocrUrl || seen.has(ocrUrl)) {
       continue;
     }
     if ((width < 300 || height < 180) && !isLikelyImageUrl(src) && !isLikelyImageUrl(linkedImage)) {
       continue;
     }
-    if (lowerSrc.includes("logo") || lowerSrc.includes("avatar") || lowerSrc.includes("profile") || lowerSrc.includes("emoji")) {
+    if (isDecorativeImage(src, image)) {
       continue;
     }
     if (lowerSrc.endsWith(".svg") || lowerSrc.startsWith("blob:")) {
       continue;
     }
 
-    seen.add(src);
-    images.push({
+    seen.add(ocrUrl);
+    candidates.push({
       url: src,
       linkedUrl: isLikelyImageUrl(linkedImage) ? linkedImage : "",
       alt: image.alt || "",
       width,
-      height
+      height,
+      score: scoreImage(image, src, linkedImage, width, height)
     });
-
-    if (images.length >= 8) {
-      break;
-    }
   }
 
-  return images;
+  return candidates
+    .filter((image) => image.score > -50)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(({ score, ...image }) => image);
 }
 
 function getBestTextSource() {
   const selectors = [
-    ".view_content",
-    ".article_content",
-    ".board_main_view",
-    ".read_body",
-    ".body_area",
-    ".write_div",
-    ".view_body",
-    "#board_read",
-    "article",
-    "main",
-    "[role='main']",
+    ...CONTENT_CONTAINER_SELECTORS,
     "body"
   ];
   const candidates = [];
@@ -131,7 +221,7 @@ function getBestTextSource() {
     for (const element of document.querySelectorAll(selector)) {
       const text = cleanText(element.innerText || "");
       if (text && !candidates.some((candidate) => candidate.text === text)) {
-        candidates.push({ text });
+        candidates.push({ text, element });
       }
     }
   }
@@ -193,7 +283,7 @@ function collectPage() {
     description: getMetaDescription(),
     text,
     comments: collectLikelyComments(),
-    images: collectImageCandidates(),
+    images: collectImageCandidates(bestSource.element),
     transcript: collectYouTubeTranscript(),
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
