@@ -143,6 +143,9 @@ qwen
 `Max chars`
 : 전체 페이지 제한이 아니라 한 번의 LM Studio 호출에 넣을 청크 크기입니다. 기본값은 `8000`입니다. LM Studio에서 context를 100k 정도로 크게 잡았다면 `80000` 또는 `100000`처럼 올려 청크 수를 줄일 수 있습니다. context 오류가 발생하면 확장은 더 작은 크기로 자동 재시도합니다.
 
+`Parallel`
+: 동시에 실행할 LM Studio 분석 호출 수입니다. 기본값은 `2`입니다. LM Studio 슬롯과 GPU 여유가 충분하면 `3` 또는 `4`를 시도할 수 있고, PC가 버거우면 `1`로 낮춥니다. 최종 종합 요약은 모든 섹션 분석이 끝난 뒤 한 번만 실행됩니다.
+
 `OCR images`
 : 켜면 본문 이미지 후보를 OCR 서버로 보냅니다. 꺼두면 OCR 서버를 호출하지 않습니다.
 
@@ -231,7 +234,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.12.xpi
+dist\local-page-summarizer-0.3.13.xpi
 ```
 
 ## 개발 검증

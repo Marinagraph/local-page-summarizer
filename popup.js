@@ -1,6 +1,8 @@
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
+const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
+const MAX_LM_STUDIO_CONCURRENCY = 4;
 const LEGACY_DEFAULT_MAX_CHARS = 24000;
 const LEGACY_DEFAULT_MODELS = new Set([
   "local-model",
@@ -12,6 +14,7 @@ const exportButton = document.querySelector("#exportButton");
 const resetButton = document.querySelector("#resetButton");
 const modelInput = document.querySelector("#modelInput");
 const maxCharsInput = document.querySelector("#maxCharsInput");
+const lmConcurrencyInput = document.querySelector("#lmConcurrencyInput");
 const ocrEnabledInput = document.querySelector("#ocrEnabledInput");
 const ocrEndpointInput = document.querySelector("#ocrEndpointInput");
 const statusElement = document.querySelector("#status");
@@ -45,6 +48,15 @@ function safeFileName(title) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80) || "page-summary";
+}
+
+function normalizeLmStudioConcurrency(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_LM_STUDIO_CONCURRENCY;
+  }
+
+  return Math.max(1, Math.min(MAX_LM_STUDIO_CONCURRENCY, Math.floor(numeric)));
 }
 
 function toMarkdown(saved) {
@@ -160,6 +172,7 @@ async function restoreSettings() {
   const settings = await browser.storage.local.get([
     "model",
     "maxChars",
+    "lmStudioConcurrency",
     "ocrEnabled",
     "ocrEndpoint",
     "lastSavedUrl",
@@ -175,6 +188,7 @@ async function restoreSettings() {
       ? DEFAULT_MAX_CHARS
       : savedMaxChars;
   }
+  lmConcurrencyInput.value = normalizeLmStudioConcurrency(settings.lmStudioConcurrency);
   if (typeof settings.ocrEnabled === "boolean") {
     ocrEnabledInput.checked = settings.ocrEnabled;
   }
@@ -197,6 +211,7 @@ async function persistSettings() {
   const settings = {
     model: modelInput.value.trim() || "auto:gemma",
     maxChars: Math.max(MIN_MAX_CHARS, Number(maxCharsInput.value) || DEFAULT_MAX_CHARS),
+    lmStudioConcurrency: normalizeLmStudioConcurrency(lmConcurrencyInput.value),
     ocrEnabled: ocrEnabledInput.checked,
     ocrEndpoint: ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT
   };

@@ -7,6 +7,8 @@ const SECTION_SUMMARY_MAX_TOKENS = 900;
 const SECTION_MERGE_MAX_TOKENS = 1200;
 const SUMMARY_MAX_TOKENS = 1800;
 const SECTION_MERGE_SKIP_RATIO = 0.45;
+const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
+const MAX_LM_STUDIO_CONCURRENCY = 4;
 
 let activeJob = null;
 let activeAbortController = null;
@@ -139,6 +141,58 @@ function splitTextIntoChunks(value, maxChars) {
 
 function splitEntriesIntoChunks(entries, maxChars) {
   return splitTextIntoChunks(entries.filter(Boolean).join("\n\n"), maxChars);
+}
+
+function resolveLmStudioConcurrency(settings) {
+  const configured = Number(settings && (settings.lmStudioConcurrency || settings.parallelRequests));
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.max(1, Math.min(MAX_LM_STUDIO_CONCURRENCY, Math.floor(configured)));
+  }
+
+  return DEFAULT_LM_STUDIO_CONCURRENCY;
+}
+
+function createTaskLimiter(limit, signal) {
+  const queue = [];
+  let active = 0;
+
+  function rejectIfAborted() {
+    if (signal && signal.aborted) {
+      throw new Error("Summary job was cancelled.");
+    }
+  }
+
+  function pump() {
+    while (active < limit && queue.length) {
+      const item = queue.shift();
+      active += 1;
+
+      Promise.resolve()
+        .then(() => {
+          rejectIfAborted();
+          return item.task();
+        })
+        .then(item.resolve, item.reject)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  }
+
+  return function schedule(task) {
+    return new Promise((resolve, reject) => {
+      try {
+        rejectIfAborted();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      queue.push({ task, resolve, reject });
+      pump();
+    });
+  };
 }
 
 function pageContext(page) {
@@ -499,17 +553,19 @@ function retryCharBudgets(maxChars) {
   return attempts;
 }
 
-async function requestContentWithRetry(model, content, signal, maxChars, maxTokens, buildMessages) {
+async function requestContentWithRetry(model, content, signal, maxChars, maxTokens, buildMessages, scheduleRequest) {
   let lastResult = null;
   let promptChars = normalizeMaxChars(maxChars);
 
   for (const attemptChars of retryCharBudgets(maxChars)) {
     promptChars = attemptChars;
-    lastResult = await requestChatCompletion(
-      model,
-      buildMessages(clampText(content, promptChars)),
-      signal,
-      maxTokens
+    lastResult = await scheduleRequest(
+      () => requestChatCompletion(
+        model,
+        buildMessages(clampText(content, promptChars)),
+        signal,
+        maxTokens
+      )
     );
 
     if (lastResult.ok) {
@@ -531,24 +587,24 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
   };
 }
 
-async function summarizeSection(model, context, section, maxChars, signal, report, sectionIndex, sectionCount) {
-  const chunkSummaries = [];
-
-  for (let index = 0; index < section.chunks.length; index += 1) {
-    if (report) {
-      await report(`LM Studio 분석 중... ${section.title} ${sectionIndex + 1}/${sectionCount}, 조각 ${index + 1}/${section.chunks.length}`);
-    }
-
+async function summarizeSection(model, context, section, maxChars, signal, report, sectionIndex, sectionCount, scheduleRequest) {
+  const chunkSummaries = await Promise.all(section.chunks.map(async (chunk, index) => {
     const result = await requestContentWithRetry(
       model,
-      section.chunks[index],
+      chunk,
       signal,
       maxChars,
       SECTION_SUMMARY_MAX_TOKENS,
-      (content) => buildSectionMessages(context, section, content, index, section.chunks.length)
+      (content) => buildSectionMessages(context, section, content, index, section.chunks.length),
+      (task) => scheduleRequest(async () => {
+        if (report) {
+          await report(`LM Studio 분석 중... ${section.title} ${sectionIndex + 1}/${sectionCount}, 조각 ${index + 1}/${section.chunks.length}`);
+        }
+        return task();
+      })
     );
-    chunkSummaries.push(result.summary);
-  }
+    return result.summary;
+  }));
 
   if (chunkSummaries.length === 1) {
     return chunkSummaries[0];
@@ -570,7 +626,8 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
     signal,
     maxChars,
     SECTION_MERGE_MAX_TOKENS,
-    (content) => buildSectionMergeMessages(context, section, content)
+    (content) => buildSectionMergeMessages(context, section, content),
+    scheduleRequest
   );
 
   return merged.summary;
@@ -581,20 +638,29 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
   const maxChars = normalizeMaxChars(settings.maxChars);
   const context = pageContext(page);
   const sections = buildAnalysisSections(page, maxChars);
+  const scheduleRequest = createTaskLimiter(resolveLmStudioConcurrency(settings), signal);
 
   if (!sections.length) {
     throw new Error("요약할 본문, 댓글, OCR, transcript 내용을 찾지 못했습니다.");
   }
 
-  const sectionSummaries = [];
-  for (let index = 0; index < sections.length; index += 1) {
-    const section = sections[index];
-    const summary = await summarizeSection(model, context, section, maxChars, signal, report, index, sections.length);
-    sectionSummaries.push({
+  const sectionSummaries = await Promise.all(sections.map(async (section, index) => {
+    const summary = await summarizeSection(
+      model,
+      context,
+      section,
+      maxChars,
+      signal,
+      report,
+      index,
+      sections.length,
+      scheduleRequest
+    );
+    return {
       title: section.title,
       summary
-    });
-  }
+    };
+  }));
 
   if (report) {
     await report("LM Studio 최종 종합 중...");
@@ -607,7 +673,8 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     signal,
     maxChars,
     SUMMARY_MAX_TOKENS,
-    (content) => buildFinalMessages(context, content)
+    (content) => buildFinalMessages(context, content),
+    scheduleRequest
   );
 
   return finalResult.summary;

@@ -31,6 +31,7 @@ If LM Studio requires an exact model name, enter that model name in the popup's 
 Set `Model` to `auto:gemma` to select the largest non-embedding Gemma model returned by LM Studio's `/v1/models` endpoint, such as `google/gemma-4-31b-qat`. You can also enter an exact model id or a partial model id manually when needed.
 
 The popup defaults `Max chars` to `8000` so models loaded with a 10k context can handle long pages, comments, OCR text, and transcript text more reliably. `Max chars` is used as the per-call chunk budget, not as a hard cap on the entire collected page. If you load a model with a larger context, such as 100k, you can raise `Max chars` in the popup to reduce the number of chunks. If LM Studio still reports a context-length error, the extension retries with a smaller prompt automatically.
+Set `Parallel` to control how many independent LM Studio analysis calls can run at the same time. The default is `2`, which is usually faster than fully sequential analysis while avoiding heavy contention. If LM Studio has enough GPU memory and multiple slots, try `3` or `4`; if the machine becomes sluggish, lower it to `1`.
 
 ## OCR server
 
@@ -60,6 +61,7 @@ The OCR reader is loaded during server startup so the first page summary does no
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.
 - Long collected pages are analyzed in stages. The extension summarizes body text, comment candidates, image OCR, and YouTube transcripts separately, skips sections that are not present, then asks LM Studio for a final combined summary.
+- Independent LM Studio section and chunk analysis calls can run in parallel. The final combined summary still runs after all section analyses complete.
 - If chunk-level analysis results are already small enough, the extension skips an extra intermediate merge call and sends them directly to the final combined summary.
 - Long summaries run in a persistent Firefox background script. The popup can close, and you can keep using another browser, VSCode, terminal, or other apps while the job continues.
 - Saved entries are stored in `browser.storage.local`.
