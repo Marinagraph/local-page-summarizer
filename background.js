@@ -372,22 +372,112 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
   }
 
   const data = await response.json();
-  const summary = data && data.choices && data.choices[0] && data.choices[0].message
-    ? data.choices[0].message.content
-    : "";
+  const summary = extractCompletionText(data);
 
   if (!summary) {
     return {
       ok: false,
       status: response.status,
-      errorText: "LM Studio response did not contain a summary."
+      errorText: `LM Studio response did not contain a summary. ${describeCompletionResponse(data)}`
     };
   }
 
   return {
     ok: true,
-    summary: summary.trim()
+    summary
   };
+}
+
+function extractCompletionText(data) {
+  const directText = extractTextValue(data && (data.output_text || data.text || data.content));
+  if (directText) {
+    return directText;
+  }
+
+  const outputs = Array.isArray(data && data.output) ? data.output : [];
+  for (const output of outputs) {
+    const text = extractTextValue(output && (output.content || output.text));
+    if (text) {
+      return text;
+    }
+  }
+
+  const choices = Array.isArray(data && data.choices) ? data.choices : [];
+  for (const choice of choices) {
+    const message = choice && choice.message ? choice.message : {};
+    const candidates = [
+      message.content,
+      message.reasoning_content,
+      message.reasoning,
+      message.response,
+      choice.text,
+      choice.content,
+      choice.delta && choice.delta.content
+    ];
+
+    for (const candidate of candidates) {
+      const text = extractTextValue(candidate);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return "";
+}
+
+function extractTextValue(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => extractTextValue(item)).filter(Boolean).join("\n").trim();
+  }
+
+  if (value && typeof value === "object") {
+    return [
+      value.text,
+      value.content,
+      value.value,
+      value.output_text
+    ].map((item) => extractTextValue(item)).filter(Boolean).join("\n").trim();
+  }
+
+  return "";
+}
+
+function describeCompletionResponse(data) {
+  try {
+    const choices = Array.isArray(data && data.choices) ? data.choices : [];
+    const description = {
+      object: data && data.object,
+      model: data && data.model,
+      usage: data && data.usage,
+      choices: choices.slice(0, 2).map((choice) => {
+        const message = choice && choice.message ? choice.message : {};
+        return {
+          index: choice && choice.index,
+          finish_reason: choice && choice.finish_reason,
+          choice_keys: choice ? Object.keys(choice) : [],
+          message_keys: Object.keys(message),
+          content_type: typeof message.content,
+          content_preview: previewText(extractTextValue(message.content)),
+          reasoning_preview: previewText(extractTextValue(message.reasoning_content || message.reasoning)),
+          text_preview: previewText(extractTextValue(choice && choice.text))
+        };
+      })
+    };
+
+    return JSON.stringify(description).slice(0, 1200);
+  } catch (error) {
+    return `Unable to describe response: ${error && error.message ? error.message : String(error)}`;
+  }
+}
+
+function previewText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.slice(0, 160);
 }
 
 function isContextLengthError(errorText) {

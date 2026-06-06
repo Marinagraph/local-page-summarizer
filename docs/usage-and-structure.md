@@ -231,7 +231,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.11.xpi
+dist\local-page-summarizer-0.3.12.xpi
 ```
 
 ## 개발 검증
