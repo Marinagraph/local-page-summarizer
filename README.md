@@ -2,6 +2,8 @@
 
 Personal Firefox extension for saving the current page and summarizing it with LM Studio's local OpenAI-compatible API.
 
+Detailed file structure and usage notes are in [`docs/usage-and-structure.md`](docs/usage-and-structure.md).
+
 ## Requirements
 
 - Firefox
