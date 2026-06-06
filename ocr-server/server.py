@@ -18,6 +18,7 @@ from pydantic import BaseModel
 MAX_IMAGES = 5
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 IMAGE_SNIFF_BYTES = 16
+OCR_SERVER_VERSION = "0.3.14"
 
 app = FastAPI(title="Local Page Summarizer OCR")
 app.add_middleware(
@@ -33,6 +34,7 @@ reader: easyocr.Reader | None = None
 class LoadedImage(NamedTuple):
     raw: bytes
     content_type: str
+    source_url: str
 
 
 class ImageCandidate(BaseModel):
@@ -87,8 +89,23 @@ def looks_like_html_or_json(raw: bytes) -> bool:
     return prefix.startswith((b"<!doctype", b"<html", b"<head", b"<body", b"{", b"["))
 
 
-def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
-    url = candidate.url
+def candidate_urls(candidate: ImageCandidate) -> list[str]:
+    urls = [
+        candidate.url,
+        candidate.originalUrl or "",
+        candidate.linkedUrl or "",
+    ]
+    unique = []
+    seen = set()
+    for url in urls:
+        normalized = str(url or "").strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            unique.append(normalized)
+    return unique
+
+
+def load_image_url(url: str, page_url: str) -> LoadedImage:
     content_type = "data:image"
     if url.startswith("data:image/"):
         try:
@@ -106,6 +123,7 @@ def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
                 ),
                 "Referer": page_url,
                 "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+                "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
             },
             timeout=20,
         )
@@ -119,7 +137,18 @@ def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
     if looks_like_html_or_json(raw):
         raise ValueError(f"non-image response ({content_type or 'unknown'}, {describe_bytes(raw)})")
 
-    return LoadedImage(raw=raw, content_type=content_type)
+    return LoadedImage(raw=raw, content_type=content_type, source_url=url)
+
+
+def load_image(candidate: ImageCandidate, page_url: str) -> LoadedImage:
+    errors = []
+    for url in candidate_urls(candidate):
+        try:
+            return load_image_url(url, page_url)
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    raise ValueError("all image URL attempts failed; " + " | ".join(errors))
 
 
 def ocr_image(loaded: LoadedImage) -> str:
@@ -137,7 +166,7 @@ def ocr_image(loaded: LoadedImage) -> str:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "gpu": gpu_name()}
+    return {"status": "ok", "gpu": gpu_name(), "version": OCR_SERVER_VERSION}
 
 
 @app.post("/ocr")
@@ -155,6 +184,7 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
                 {
                     "index": index,
                     "url": display_url,
+                    "sourceUrl": loaded.source_url,
                     "alt": candidate.alt or "",
                     "width": candidate.width or 0,
                     "height": candidate.height or 0,
@@ -171,6 +201,7 @@ def run_ocr(payload: OcrRequest) -> dict[str, Any]:
                 {
                     "index": index,
                     "url": display_url,
+                    "sourceUrl": candidate.url,
                     "alt": candidate.alt or "",
                     "width": candidate.width or 0,
                     "height": candidate.height or 0,

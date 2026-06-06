@@ -5,6 +5,7 @@ $venv = Join-Path $root ".venv-ocr"
 $python = Join-Path $venv "Scripts\python.exe"
 $ocrPort = 2010
 $healthUrl = "http://127.0.0.1:2010/health"
+$expectedVersion = (Get-Content -Raw (Join-Path $root "manifest.json") | ConvertFrom-Json).version
 $torchIndexUrl = "https://download.pytorch.org/whl/cu128"
 $torchPackages = @("torch==2.11.0+cu128", "torchvision==0.26.0+cu128")
 
@@ -41,12 +42,17 @@ if ($health -and $health.StatusCode -eq 200) {
     # Treat unknown health responses as stale servers on the OCR port.
   }
 
-  if ($healthBody -and $healthBody.gpu -and "$($healthBody.gpu)".StartsWith("cuda:")) {
+  if (
+    $healthBody -and
+    $healthBody.gpu -and
+    "$($healthBody.gpu)".StartsWith("cuda:") -and
+    $healthBody.version -eq $expectedVersion
+  ) {
     Write-Host "GPU OCR server is already running at $healthUrl ($($healthBody.gpu))"
     exit 0
   }
 
-  Write-Warning "A server is already running at $healthUrl, but it is not the current GPU OCR server. Restarting it."
+  Write-Warning "A server is already running at $healthUrl, but it is not the current OCR server version ($expectedVersion). Restarting it."
   Stop-StaleOcrServer
 }
 

@@ -778,7 +778,7 @@ async function enrichPageWithOcr(page, settings, signal) {
 }
 
 async function prepareImageForOcr(image, signal) {
-  const url = image.linkedUrl || image.url;
+  const url = preferredImageUrlForOcr(image);
 
   if (shouldLetOcrServerFetch(url)) {
     return {
@@ -817,6 +817,21 @@ async function prepareImageForOcr(image, signal) {
       fetchError: error && error.message ? error.message : String(error)
     };
   }
+}
+
+function preferredImageUrlForOcr(image) {
+  const imageUrl = image && image.url ? String(image.url) : "";
+  const linkedUrl = image && image.linkedUrl ? String(image.linkedUrl) : "";
+
+  if (isDcinsideRenderedImageUrl(imageUrl)) {
+    return imageUrl;
+  }
+
+  return linkedUrl || imageUrl;
+}
+
+function isDcinsideRenderedImageUrl(url) {
+  return /\/\/(?:(?:dcimg|dccdn)\d*\.dcinside\.co\.kr)\/viewimage\.php/i.test(String(url || ""));
 }
 
 function shouldLetOcrServerFetch(url) {
@@ -874,6 +889,7 @@ function toMarkdown(saved) {
         `### Image ${result.index}`,
         "",
         `- URL: ${result.url}`,
+        result.sourceUrl && result.sourceUrl !== result.url ? `- OCR source URL: ${result.sourceUrl}` : "",
         `- Size: ${result.width}x${result.height}`,
         result.alt ? `- Alt: ${result.alt}` : "",
         result.error ? `- Error: ${result.error}` : "",

@@ -78,6 +78,7 @@ function toMarkdown(saved) {
         `### Image ${result.index}`,
         "",
         `- URL: ${result.url}`,
+        result.sourceUrl && result.sourceUrl !== result.url ? `- OCR source URL: ${result.sourceUrl}` : "",
         `- Size: ${result.width}x${result.height}`,
         result.alt ? `- Alt: ${result.alt}` : "",
         result.error ? `- Error: ${result.error}` : "",
