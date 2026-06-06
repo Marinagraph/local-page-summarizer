@@ -171,7 +171,7 @@ async function restoreSettings() {
   }
   if (settings.maxChars) {
     const savedMaxChars = Math.max(MIN_MAX_CHARS, Number(settings.maxChars) || DEFAULT_MAX_CHARS);
-    maxCharsInput.value = savedMaxChars >= LEGACY_DEFAULT_MAX_CHARS
+    maxCharsInput.value = savedMaxChars === LEGACY_DEFAULT_MAX_CHARS
       ? DEFAULT_MAX_CHARS
       : savedMaxChars;
   }
