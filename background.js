@@ -195,9 +195,18 @@ function createTaskLimiter(limit, signal) {
   };
 }
 
+function extensionVersion() {
+  try {
+    return browser.runtime.getManifest().version || "unknown";
+  } catch (error) {
+    return "unknown";
+  }
+}
+
 function pageContext(page) {
   const now = new Date();
   return [
+    `확장 버전: ${extensionVersion()}`,
     `현재 날짜(사용자 PC 기준): ${now.toLocaleDateString("ko-KR")} (${now.toISOString().slice(0, 10)})`,
     `수집 시각: ${page.collectedAt || now.toISOString()}`,
     `제목: ${page.title || ""}`,
@@ -941,6 +950,7 @@ function blobToDataUrl(blob) {
 async function saveResult(page, summary, lmTimings = []) {
   const saved = {
     ...page,
+    summarizerVersion: extensionVersion(),
     summary,
     lmTimings,
     savedAt: new Date().toISOString()
@@ -1010,6 +1020,7 @@ function toMarkdown(saved) {
     `# ${saved.title}`,
     "",
     `- URL: ${saved.url}`,
+    `- Summarizer version: ${saved.summarizerVersion || extensionVersion()}`,
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,

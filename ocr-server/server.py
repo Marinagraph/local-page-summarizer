@@ -24,7 +24,7 @@ MAX_DOWNLOAD_WORKERS = int(os.getenv("OCR_DOWNLOAD_WORKERS", "5"))
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("OCR_REQUEST_TIMEOUT_SECONDS", "8"))
 EASYOCR_BATCH_SIZE = int(os.getenv("OCR_EASYOCR_BATCH_SIZE", "8"))
 EASYOCR_CANVAS_SIZE = int(os.getenv("OCR_EASYOCR_CANVAS_SIZE", "2560"))
-OCR_SERVER_VERSION = "0.3.19"
+OCR_SERVER_VERSION = "0.3.20"
 
 app = FastAPI(title="Local Page Summarizer OCR")
 app.add_middleware(

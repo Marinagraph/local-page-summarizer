@@ -107,6 +107,7 @@ function toMarkdown(saved) {
     `# ${saved.title}`,
     "",
     `- URL: ${saved.url}`,
+    `- Summarizer version: ${saved.summarizerVersion || "unknown"}`,
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
@@ -139,8 +140,9 @@ function renderMetaFromSaved(saved) {
     `댓글 후보 ${(saved.comments || []).length.toLocaleString()}개`,
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
+    saved.summarizerVersion ? `버전 ${saved.summarizerVersion}` : "",
     `저장 ${new Date(saved.savedAt || saved.collectedAt).toLocaleString()}`
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function renderJobState(state) {
