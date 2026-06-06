@@ -90,6 +90,18 @@ function toMarkdown(saved) {
       ].filter(Boolean))
     ]
     : [];
+  const lmTimingSection = saved.lmTimings && saved.lmTimings.length
+    ? [
+      "## LM Studio Timing",
+      "",
+      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Total |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+      ...saved.lmTimings.map((timing) => {
+        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${timing.totalTokens || ""} |`;
+      }),
+      ""
+    ]
+    : [];
 
   return [
     `# ${saved.title}`,
@@ -108,6 +120,7 @@ function toMarkdown(saved) {
     "",
     ...transcriptSection,
     ...ocrSection,
+    ...lmTimingSection,
     "## Source Text",
     "",
     "```text",

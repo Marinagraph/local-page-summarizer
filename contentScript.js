@@ -12,6 +12,10 @@ function getMetaDescription() {
   return meta ? cleanText(meta.getAttribute("content") || "") : "";
 }
 
+function isDcinsidePage() {
+  return /(^|\.)dcinside\.com$/i.test(location.hostname);
+}
+
 function collectDcinsideComments() {
   const comments = [];
   const seen = new Set();
@@ -160,6 +164,16 @@ const CONTENT_CONTAINER_SELECTORS = [
   "article",
   "main",
   "[role='main']"
+];
+
+const DCINSIDE_CONTENT_SELECTORS = [
+  ".write_div",
+  ".view_content .write_div",
+  ".gallview_contents .write_div",
+  ".view_content",
+  ".gallview_contents",
+  ".writing_view_box",
+  "#board_read .write_div"
 ];
 
 const NON_CONTENT_CONTAINER_SELECTOR = [
@@ -382,6 +396,13 @@ function collectImageCandidates(contentRoot) {
 }
 
 function getBestTextSource() {
+  if (isDcinsidePage()) {
+    const dcinsideSource = getDcinsideTextSource();
+    if (dcinsideSource.text) {
+      return dcinsideSource;
+    }
+  }
+
   const selectors = [
     ...CONTENT_CONTAINER_SELECTORS,
     "body"
@@ -403,6 +424,80 @@ function getBestTextSource() {
 
   candidates.sort((a, b) => (b.priority - a.priority) || (b.text.length - a.text.length));
   return candidates[0] || { text: cleanText(document.body.innerText || "") };
+}
+
+function getDcinsideTextSource() {
+  const candidates = [];
+
+  for (const selector of DCINSIDE_CONTENT_SELECTORS) {
+    for (const element of document.querySelectorAll(selector)) {
+      const text = cleanDcinsideBodyText(element.innerText || element.textContent || "");
+      if (!text || candidates.some((candidate) => candidate.text === text)) {
+        continue;
+      }
+
+      candidates.push({
+        text,
+        element,
+        priority: selector.includes("write_div") ? 3 : 2
+      });
+    }
+  }
+
+  candidates.sort((a, b) => (b.priority - a.priority) || (b.text.length - a.text.length));
+  return candidates[0] || { text: "", element: null };
+}
+
+function cleanDcinsideBodyText(value) {
+  const lines = String(value || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+  const kept = [];
+  const stopPatterns = [
+    /^전체\s*댓글\s*[\d,]+\s*개/,
+    /^댓글\s*[\d,]+\s*개/,
+    /^등록순$/,
+    /^최신순$/,
+    /^본문 보기$/,
+    /^댓글닫기$/,
+    /^로그인$/,
+    /^갤러리 리스트$/,
+    /^실시간 베스트/,
+    /^개념글/,
+    /^뉴스$/,
+    /^만두몰/
+  ];
+  const dropPatterns = [
+    /^추천\s*\d+/,
+    /^비추천\s*\d+/,
+    /^댓글\s*\d+/,
+    /^조회\s*\d+/,
+    /^작성일/,
+    /^디시콘/,
+    /^공유$/,
+    /^신고$/,
+    /^삭제$/,
+    /^수정$/,
+    /^답글$/,
+    /^본문영역$/,
+    /^이미지\s*\d+$/,
+    /^이미지 순서/,
+    /^이미지를 클릭/
+  ];
+
+  for (const line of lines) {
+    if (stopPatterns.some((pattern) => pattern.test(line))) {
+      break;
+    }
+    if (dropPatterns.some((pattern) => pattern.test(line))) {
+      continue;
+    }
+    kept.push(line);
+  }
+
+  return cleanText(kept.join("\n"));
 }
 
 function isYouTubePage() {

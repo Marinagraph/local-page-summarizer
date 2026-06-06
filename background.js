@@ -3,9 +3,9 @@ const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
-const SECTION_SUMMARY_MAX_TOKENS = 900;
-const SECTION_MERGE_MAX_TOKENS = 1200;
-const SUMMARY_MAX_TOKENS = 1800;
+const SECTION_SUMMARY_MAX_TOKENS = 650;
+const SECTION_MERGE_MAX_TOKENS = 850;
+const SUMMARY_MAX_TOKENS = 1100;
 const SECTION_MERGE_SKIP_RATIO = 0.45;
 const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
 const MAX_LM_STUDIO_CONCURRENCY = 4;
@@ -402,6 +402,7 @@ function buildFinalMessages(context, sectionSummaryText) {
 }
 
 async function requestChatCompletion(model, messages, signal, maxTokens) {
+  const started = Date.now();
   const response = await fetch(LM_STUDIO_ENDPOINT, {
     method: "POST",
     signal,
@@ -438,7 +439,9 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
 
   return {
     ok: true,
-    summary
+    summary,
+    usage: data && data.usage ? data.usage : null,
+    elapsedMs: Date.now() - started
   };
 }
 
@@ -583,11 +586,14 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
 
   return {
     summary: lastResult.summary,
-    promptChars
+    promptChars,
+    usage: lastResult.usage || null,
+    elapsedMs: lastResult.elapsedMs || 0
   };
 }
 
 async function summarizeSection(model, context, section, maxChars, signal, report, sectionIndex, sectionCount, scheduleRequest) {
+  const timings = [];
   const chunkSummaries = await Promise.all(section.chunks.map(async (chunk, index) => {
     const result = await requestContentWithRetry(
       model,
@@ -603,17 +609,27 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
         return task();
       })
     );
+    timings.push({
+      type: "section",
+      section: section.title,
+      chunk: index + 1,
+      chunks: section.chunks.length,
+      elapsedMs: result.elapsedMs,
+      promptTokens: result.usage && result.usage.prompt_tokens,
+      completionTokens: result.usage && result.usage.completion_tokens,
+      totalTokens: result.usage && result.usage.total_tokens
+    });
     return result.summary;
   }));
 
   if (chunkSummaries.length === 1) {
-    return chunkSummaries[0];
+    return { summary: chunkSummaries[0], timings };
   }
 
   const combinedSummary = chunkSummaries.map((summary, index) => `## 조각 ${index + 1}\n${summary}`).join("\n\n");
   const skipMergeLimit = Math.floor(normalizeMaxChars(maxChars) * SECTION_MERGE_SKIP_RATIO);
   if (combinedSummary.length <= skipMergeLimit) {
-    return combinedSummary;
+    return { summary: combinedSummary, timings };
   }
 
   if (report) {
@@ -629,8 +645,16 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
     (content) => buildSectionMergeMessages(context, section, content),
     scheduleRequest
   );
+  timings.push({
+    type: "section-merge",
+    section: section.title,
+    elapsedMs: merged.elapsedMs,
+    promptTokens: merged.usage && merged.usage.prompt_tokens,
+    completionTokens: merged.usage && merged.usage.completion_tokens,
+    totalTokens: merged.usage && merged.usage.total_tokens
+  });
 
-  return merged.summary;
+  return { summary: merged.summary, timings };
 }
 
 async function summarizeWithLMStudio(page, settings, signal, report) {
@@ -644,8 +668,9 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     throw new Error("요약할 본문, 댓글, OCR, transcript 내용을 찾지 못했습니다.");
   }
 
+  const lmTimings = [];
   const sectionSummaries = await Promise.all(sections.map(async (section, index) => {
-    const summary = await summarizeSection(
+    const result = await summarizeSection(
       model,
       context,
       section,
@@ -656,9 +681,10 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
       sections.length,
       scheduleRequest
     );
+    lmTimings.push(...result.timings);
     return {
       title: section.title,
-      summary
+      summary: result.summary
     };
   }));
 
@@ -676,8 +702,19 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     (content) => buildFinalMessages(context, content),
     scheduleRequest
   );
+  lmTimings.push({
+    type: "final",
+    section: "final",
+    elapsedMs: finalResult.elapsedMs,
+    promptTokens: finalResult.usage && finalResult.usage.prompt_tokens,
+    completionTokens: finalResult.usage && finalResult.usage.completion_tokens,
+    totalTokens: finalResult.usage && finalResult.usage.total_tokens
+  });
 
-  return finalResult.summary;
+  return {
+    summary: finalResult.summary,
+    lmTimings
+  };
 }
 
 async function resolveModelName(configuredModel, signal) {
@@ -848,10 +885,11 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function saveResult(page, summary) {
+async function saveResult(page, summary, lmTimings = []) {
   const saved = {
     ...page,
     summary,
+    lmTimings,
     savedAt: new Date().toISOString()
   };
 
@@ -902,6 +940,18 @@ function toMarkdown(saved) {
       ].filter(Boolean))
     ]
     : [];
+  const lmTimingSection = saved.lmTimings && saved.lmTimings.length
+    ? [
+      "## LM Studio Timing",
+      "",
+      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Total |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+      ...saved.lmTimings.map((timing) => {
+        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${timing.totalTokens || ""} |`;
+      }),
+      ""
+    ]
+    : [];
 
   return [
     `# ${saved.title}`,
@@ -923,6 +973,7 @@ function toMarkdown(saved) {
     "",
     ...transcriptSection,
     ...ocrSection,
+    ...lmTimingSection,
     "## Source Text",
     "",
     "```text",
@@ -980,10 +1031,11 @@ async function runSummaryJob(request) {
     }
 
     await setJobState({ message: "LM Studio 분석 준비 중..." });
-    const summary = await summarizeWithLMStudio(page, request.settings, signal, (message) => setJobState({ message }));
+    const lmResult = await summarizeWithLMStudio(page, request.settings, signal, (message) => setJobState({ message }));
+    const summary = lmResult.summary;
 
     await setJobState({ message: "결과 저장 중..." });
-    const saved = await saveResult(page, summary);
+    const saved = await saveResult(page, summary, lmResult.lmTimings);
     await downloadMarkdown(saved);
 
     await setJobState({

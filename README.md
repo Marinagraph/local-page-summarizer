@@ -66,6 +66,7 @@ OCR image downloads are performed in parallel, while EasyOCR recognition stays G
 - Long collected pages are analyzed in stages. The extension summarizes body text, comment candidates, image OCR, and YouTube transcripts separately, skips sections that are not present, then asks LM Studio for a final combined summary.
 - Independent LM Studio section and chunk analysis calls can run in parallel. The final combined summary still runs after all section analyses complete.
 - If chunk-level analysis results are already small enough, the extension skips an extra intermediate merge call and sends them directly to the final combined summary.
+- LM Studio output token limits are kept conservative for local 26B-class models, and Markdown exports include LM Studio timing by section so slow steps can be diagnosed.
 - Long summaries run in a persistent Firefox background script. The popup can close, and you can keep using another browser, VSCode, terminal, or other apps while the job continues.
 - Saved entries are stored in `browser.storage.local`.
 - After each summary, a Markdown file is automatically downloaded under `Local Page Summarizer`.
