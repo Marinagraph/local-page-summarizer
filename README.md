@@ -26,7 +26,7 @@ http://127.0.0.1:2000/v1/chat/completions
 ```
 
 If LM Studio requires an exact model name, enter that model name in the popup's `Model` field.
-The default model name is `gemma-4-26b-a4b-it`.
+Set `Model` to `auto:gemma` to select the largest non-embedding Gemma model returned by LM Studio's `/v1/models` endpoint, such as `google/gemma-4-31b-qat`. You can also enter an exact model id or a partial model id manually when needed.
 
 ## OCR server
 

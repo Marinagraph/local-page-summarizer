@@ -1,4 +1,5 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
+const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 
 let activeJob = null;
@@ -70,7 +71,7 @@ function compactForPrompt(page, maxChars) {
 }
 
 async function summarizeWithLMStudio(page, settings, signal) {
-  const model = settings.model || "gemma-4-26b-a4b-it";
+  const model = await resolveModelName(settings.model, signal);
   const maxChars = Math.max(1000, Number(settings.maxChars) || 24000);
   const content = compactForPrompt(page, maxChars);
 
@@ -139,6 +140,67 @@ async function summarizeWithLMStudio(page, settings, signal) {
   }
 
   return summary.trim();
+}
+
+async function resolveModelName(configuredModel, signal) {
+  const requested = (configuredModel || "").trim();
+  const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
+  if (!response.ok) {
+    throw new Error(`LM Studio 모델 목록 요청 실패: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const models = (Array.isArray(data.data) ? data.data : []).filter((item) => {
+    const id = String(item.id || "");
+    return id && !id.toLowerCase().includes("embedding") && !id.toLowerCase().includes("embed");
+  });
+
+  if (requested && !requested.toLowerCase().startsWith("auto")) {
+    const exact = models.find((item) => item.id === requested);
+    if (exact) {
+      return exact.id;
+    }
+
+    const partialMatches = models.filter((item) => item.id.toLowerCase().includes(requested.toLowerCase()));
+    if (partialMatches.length) {
+      return pickBestModel(partialMatches).id;
+    }
+
+    return requested;
+  }
+
+  const query = requested.includes(":")
+    ? requested.slice(requested.indexOf(":") + 1).trim().toLowerCase()
+    : "";
+  const candidates = query
+    ? models.filter((item) => item.id.toLowerCase().includes(query))
+    : models;
+  const model = pickBestModel(candidates);
+
+  if (!model || !model.id) {
+    throw new Error("LM Studio에서 사용할 chat 모델을 찾지 못했습니다.");
+  }
+
+  return model.id;
+}
+
+function pickBestModel(models) {
+  return [...models].sort((a, b) => {
+    const bSize = extractModelSizeB(b.id);
+    const aSize = extractModelSizeB(a.id);
+    if (bSize !== aSize) {
+      return bSize - aSize;
+    }
+    return 0;
+  })[0];
+}
+
+function extractModelSizeB(modelId) {
+  const matches = [...String(modelId || "").matchAll(/(\d+(?:\.\d+)?)\s*b/gi)];
+  if (!matches.length) {
+    return 0;
+  }
+  return Math.max(...matches.map((match) => Number(match[1]) || 0));
 }
 
 async function enrichPageWithOcr(page, settings, signal) {

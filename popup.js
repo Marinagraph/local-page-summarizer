@@ -1,4 +1,8 @@
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
+const LEGACY_DEFAULT_MODELS = new Set([
+  "local-model",
+  "gemma-4-26b-a4b-it"
+]);
 
 const collectButton = document.querySelector("#collectButton");
 const exportButton = document.querySelector("#exportButton");
@@ -160,7 +164,7 @@ async function restoreSettings() {
   ]);
 
   if (settings.model) {
-    modelInput.value = settings.model;
+    modelInput.value = LEGACY_DEFAULT_MODELS.has(settings.model) ? "auto:gemma" : settings.model;
   }
   if (settings.maxChars) {
     maxCharsInput.value = settings.maxChars;
@@ -185,7 +189,7 @@ async function restoreSettings() {
 
 async function persistSettings() {
   const settings = {
-    model: modelInput.value.trim() || "gemma-4-26b-a4b-it",
+    model: modelInput.value.trim() || "auto:gemma",
     maxChars: Math.max(1000, Number(maxCharsInput.value) || 24000),
     ocrEnabled: ocrEnabledInput.checked,
     ocrEndpoint: ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT
