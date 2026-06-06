@@ -12,7 +12,102 @@ function getMetaDescription() {
   return meta ? cleanText(meta.getAttribute("content") || "") : "";
 }
 
-function collectLikelyComments() {
+function collectDcinsideComments() {
+  const comments = [];
+  const seen = new Set();
+  const items = document.querySelectorAll(
+    ".comment_box .cmt_list > li.ub-content, " +
+    ".comment_box li[id^='comment_li_'], " +
+    ".comment_box li[id^='reply_li_']"
+  );
+
+  for (const item of items) {
+    const textElement = item.querySelector(".usertxt.ub-word, .usertxt");
+    const text = cleanText(textElement ? textElement.innerText || textElement.textContent || "" : "");
+    if (!text) {
+      continue;
+    }
+
+    const nick = cleanText(item.querySelector(".nickname em, .nickname")?.innerText || "");
+    const ip = cleanText(item.querySelector(".ip")?.innerText || "");
+    const date = cleanText(item.querySelector(".date_time, .gall_date")?.innerText || "");
+    const prefix = [nick, ip, date].filter(Boolean).join(" ");
+    const comment = prefix ? `${prefix}\n${text}` : text;
+
+    if (seen.has(comment)) {
+      continue;
+    }
+
+    seen.add(comment);
+    comments.push(comment);
+  }
+
+  return comments;
+}
+
+function collectCommentsFromVisibleText(text) {
+  const source = String(text || "");
+  const startMatch = source.match(/전체\s*댓글\s*[\d,]+\s*개/);
+  if (!startMatch || typeof startMatch.index !== "number") {
+    return [];
+  }
+
+  const start = startMatch.index + startMatch[0].length;
+  const afterStart = source.slice(start);
+  const endMarkers = [
+    "본문 보기댓글닫기새로고침",
+    "타인의 권리를 침해하거나",
+    "Shift+Enter 키를 동시에 누르면"
+  ];
+  const endCandidates = endMarkers
+    .map((marker) => afterStart.indexOf(marker))
+    .filter((index) => index >= 0);
+  const end = endCandidates.length ? Math.min(...endCandidates) : afterStart.length;
+  const segment = afterStart
+    .slice(0, end)
+    .replace(/^(등록순|최신순|답글순|댓글 등록본문 보기 댓글닫기 새로고침)\s*/gm, "")
+    .trim();
+
+  const comments = [];
+  const seen = new Set();
+  const datePattern = /\n?(\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2})\s*\n삭제/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = datePattern.exec(segment)) !== null) {
+    const raw = segment.slice(lastIndex, match.index);
+    lastIndex = datePattern.lastIndex;
+    const lines = raw.split("\n").map((line) => cleanText(line)).filter(Boolean);
+    if (!lines.length) {
+      continue;
+    }
+
+    while (lines.length && /^(등록순|최신순|답글순|댓글 등록|본문 보기|댓글닫기|새로고침)$/.test(lines[0])) {
+      lines.shift();
+    }
+
+    if (lines.length >= 2 && /^\([^)]+\)$/.test(lines[1])) {
+      lines.splice(0, 2, `${lines[0]} ${lines[1]} ${match[1]}`);
+    } else if (lines.length >= 1) {
+      lines[0] = `${lines[0]} ${match[1]}`;
+    }
+
+    const comment = cleanText(lines.join("\n"));
+    if (comment && !seen.has(comment)) {
+      seen.add(comment);
+      comments.push(comment);
+    }
+  }
+
+  return comments;
+}
+
+function collectLikelyComments(pageText) {
+  const dcinsideComments = collectDcinsideComments();
+  if (dcinsideComments.length) {
+    return dcinsideComments;
+  }
+
   const selectors = [
     "[data-testid*='comment' i]",
     "[class*='comment' i]",
@@ -32,6 +127,10 @@ function collectLikelyComments() {
       seen.add(text);
       comments.push(text);
     }
+  }
+
+  if (!comments.length) {
+    return collectCommentsFromVisibleText(pageText);
   }
 
   return comments;
@@ -111,6 +210,7 @@ function collectImageCandidates(contentRoot) {
       /\/viewimage(?:pop)?\.php(?:\?|$)/i.test(url) ||
       /\/\/(?:dcimg|image)\d*\.dcinside\.co\.kr\//i.test(url) ||
       /\/\/image\.dcinside\.com\//i.test(url) ||
+      /\/\/dccdn\d*\.dcinside\.co\.kr\//i.test(url) ||
       /\/\/ncache\.ilbe\.com\/files\/attach\//i.test(url)
     );
   }
@@ -140,6 +240,9 @@ function collectImageCandidates(contentRoot) {
       lowerSrc.includes("emoji") ||
       lowerSrc.includes("sprite") ||
       lowerSrc.includes("icon") ||
+      lowerSrc.includes("loading") ||
+      lowerSrc.includes("blank") ||
+      lowerSrc.includes("spacer") ||
       tokenText.includes("logo") ||
       tokenText.includes("avatar") ||
       tokenText.includes("profile") ||
@@ -180,13 +283,13 @@ function collectImageCandidates(contentRoot) {
 
   for (const image of document.querySelectorAll("img")) {
     const src = resolveUrl(
-      image.currentSrc ||
-      image.src ||
       image.getAttribute("data-original") ||
       image.getAttribute("data-src") ||
       image.getAttribute("data-lazy-src") ||
       image.getAttribute("data-url") ||
-      firstSrcFromSrcset(image.getAttribute("srcset"))
+      firstSrcFromSrcset(image.getAttribute("srcset")) ||
+      image.currentSrc ||
+      image.src
     );
     const width = image.naturalWidth || image.width || 0;
     const height = image.naturalHeight || image.height || 0;
@@ -307,7 +410,7 @@ function collectPage() {
     url: location.href,
     description: getMetaDescription(),
     text,
-    comments: collectLikelyComments(),
+    comments: collectLikelyComments(text),
     images: collectImageCandidates(bestSource.element),
     transcript: collectYouTubeTranscript(),
     selectedOnly: Boolean(selection),

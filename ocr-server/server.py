@@ -84,8 +84,12 @@ def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:
         response = requests.get(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 Local Page Summarizer OCR",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
+                    "Gecko/20100101 Firefox/126.0"
+                ),
                 "Referer": page_url,
+                "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
             },
             timeout=20,
         )

@@ -187,7 +187,9 @@ function buildAnalysisSections(page, maxChars) {
         title: "댓글",
         instruction: [
           "댓글 후보에서 반복되는 반응, 논쟁점, 신뢰할 만한 지적, 감정적 반응을 구분한다.",
+          "대표적인 댓글 흐름과 반대 의견을 모두 포함한다.",
           "눈여겨볼 댓글은 원문 핵심 문장만 짧게 인용한다.",
+          "의미 있는 댓글이 있으면 최소 3개 이상 짧게 인용한다.",
           "의미 없는 짧은 반응, 중복, 광고성 문구는 제외한다."
         ].join(" "),
         chunks: commentChunks
@@ -330,6 +332,7 @@ function buildFinalMessages(context, sectionSummaryText) {
         "5. 눈여겨볼 댓글",
         "   - 참고할 만한 댓글이 있으면 원문에서 핵심 문장만 짧게 인용하고, 왜 중요한지 한 줄로 설명",
         "   - 댓글 후보가 없거나 의미 있는 댓글이 없으면 '특별히 인용할 댓글 없음'이라고 작성",
+        "   - 댓글 섹션 분석이 제공된 경우에는 가능한 한 대표 댓글을 인용하고, 쉽게 '없음'으로 처리하지 말 것",
         "6. 이미지 OCR에서 확인한 내용",
         "7. YouTube transcript에서 확인한 내용",
         "8. 구매 또는 판단 시 주의점",
@@ -660,7 +663,7 @@ async function prepareImageForOcr(image, signal) {
 }
 
 function shouldLetOcrServerFetch(url) {
-  return /\/\/(?:(?:dcimg|image)\d*\.dcinside\.co\.kr|image\.dcinside\.com)\/viewimage(?:pop)?\.php/i.test(String(url || ""));
+  return /\/\/(?:(?:dcimg|image|dccdn)\d*\.dcinside\.co\.kr|image\.dcinside\.com)\/viewimage(?:pop)?\.php/i.test(String(url || ""));
 }
 
 function blobToDataUrl(blob) {
@@ -733,6 +736,9 @@ function toMarkdown(saved) {
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
+    `- Comment candidates: ${(saved.comments || []).length}`,
+    `- Image candidates: ${(saved.images || []).length}`,
+    `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
     "",
     "## Summary",
     "",

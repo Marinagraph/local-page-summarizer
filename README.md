@@ -54,6 +54,7 @@ The OCR reader is loaded during server startup so the first page summary does no
 - If text is selected on the page, the extension summarizes the selected text.
 - If nothing is selected, it summarizes the visible page body.
 - If likely comments are found, all currently visible comment candidates are analyzed. The extension does not fetch additional paginated comment pages.
+- On DCInside, rendered comment rows are collected from the visible comment list. If the row-based extraction fails, the extension falls back to parsing the visible `전체 댓글 ...개` text block.
 - If OCR is enabled, the extension sends up to five large body-image URLs to the local OCR server and adds extracted text to the summary prompt. It prioritizes images inside the main content area and deprioritizes logos, avatars, banners, sidebars, comments, and reply areas.
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.

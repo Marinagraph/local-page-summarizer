@@ -54,7 +54,7 @@ dist\
 : Firefox 툴바 버튼을 눌렀을 때 열리는 팝업 UI입니다. 모델명, 최대 청크 크기, OCR 사용 여부, OCR endpoint를 설정하고 작업 시작/상태 표시/Markdown 내보내기를 담당합니다. 긴 요약 작업 자체는 popup에서 돌리지 않습니다.
 
 `contentScript.js`
-: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 이미지 후보는 본문 영역의 이미지를 우선하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 낮은 우선순위로 처리합니다.
+: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 렌더링된 댓글 행을 우선 수집하고, 실패하면 보이는 `전체 댓글 ...개` 텍스트 구간을 파싱합니다. 이미지 후보는 본문 영역의 이미지를 우선하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 낮은 우선순위로 처리합니다.
 
 `background.js`
 : 핵심 작업자입니다. popup에서 요청을 받으면 현재 탭에서 수집한 데이터를 받아 OCR 서버와 LM Studio를 호출하고, 결과를 `browser.storage.local`에 저장한 뒤 Markdown 파일을 다운로드합니다.
@@ -231,7 +231,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.9.xpi
+dist\local-page-summarizer-0.3.10.xpi
 ```
 
 ## 개발 검증
@@ -269,6 +269,9 @@ git diff --check
 
 `DCInside 이미지 fetch failed: 403`
 : 디시 이미지는 직접 접근이 막히는 경우가 많습니다. 최신 버전은 OCR 서버가 `Referer`를 붙여 가져오게 처리합니다. OCR 서버가 실행 중인지 먼저 확인합니다.
+
+`DCInside 댓글이 요약에 약하게 반영됨`
+: 최신 버전은 `.comment_box` 안의 렌더링된 댓글 행을 직접 수집합니다. 그래도 댓글 후보가 0개로 보이면 페이지가 댓글을 아직 렌더링하지 않은 상태일 수 있으므로 댓글이 화면에 보인 뒤 다시 실행합니다.
 
 `popup을 닫으면 작업이 끊기는 문제`
 : 현재 구조에서는 긴 작업을 popup이 아니라 persistent background script가 수행합니다. popup을 닫거나 다른 창을 사용해도 작업은 계속됩니다.
