@@ -69,7 +69,7 @@ def require_gpu() -> None:
 
 @app.on_event("startup")
 def validate_gpu_on_startup() -> None:
-    require_gpu()
+    get_reader()
 
 
 def load_image_bytes(candidate: ImageCandidate, page_url: str) -> bytes:

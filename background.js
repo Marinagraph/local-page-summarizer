@@ -6,6 +6,7 @@ const MIN_MAX_CHARS = 1000;
 const SECTION_SUMMARY_MAX_TOKENS = 900;
 const SECTION_MERGE_MAX_TOKENS = 1200;
 const SUMMARY_MAX_TOKENS = 1800;
+const SECTION_MERGE_SKIP_RATIO = 0.45;
 
 let activeJob = null;
 let activeAbortController = null;
@@ -391,14 +392,15 @@ function isContextLengthError(errorText) {
 }
 
 function retryCharBudgets(maxChars) {
+  const normalized = normalizeMaxChars(maxChars);
   const attempts = [...new Set([
-    normalizeMaxChars(maxChars),
-    Math.floor(normalizeMaxChars(maxChars) * 0.65),
-    Math.floor(normalizeMaxChars(maxChars) * 0.4),
+    normalized,
+    Math.floor(normalized * 0.65),
+    Math.floor(normalized * 0.4),
     4000,
     2000,
     1000
-  ].map((value) => Math.min(normalizeMaxChars(maxChars), value))
+  ].map((value) => Math.min(normalized, value))
     .filter((value) => value >= MIN_MAX_CHARS))]
     .sort((a, b) => b - a);
   return attempts;
@@ -459,13 +461,19 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
     return chunkSummaries[0];
   }
 
+  const combinedSummary = chunkSummaries.map((summary, index) => `## 조각 ${index + 1}\n${summary}`).join("\n\n");
+  const skipMergeLimit = Math.floor(normalizeMaxChars(maxChars) * SECTION_MERGE_SKIP_RATIO);
+  if (combinedSummary.length <= skipMergeLimit) {
+    return combinedSummary;
+  }
+
   if (report) {
     await report(`LM Studio 분석 병합 중... ${section.title}`);
   }
 
   const merged = await requestContentWithRetry(
     model,
-    chunkSummaries.map((summary, index) => `## 청크 ${index + 1}\n${summary}`).join("\n\n"),
+    combinedSummary,
     signal,
     maxChars,
     SECTION_MERGE_MAX_TOKENS,

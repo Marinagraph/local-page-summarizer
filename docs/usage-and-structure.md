@@ -162,7 +162,7 @@ cd C:\Users\objectives\local-page-summarizer
 .\scripts\start-ocr-server.ps1
 ```
 
-처음 실행하면 `.venv-ocr` 가상환경을 만들고 EasyOCR dependency를 설치한 뒤, PyTorch가 CUDA GPU를 인식하는지 확인하고 EasyOCR 모델을 설치합니다. OCR 서버는 GPU 전용이며 CUDA가 보이지 않으면 시작하지 않습니다. 이 과정은 시간이 걸릴 수 있습니다.
+처음 실행하면 `.venv-ocr` 가상환경을 만들고 EasyOCR dependency를 설치한 뒤, PyTorch가 CUDA GPU를 인식하는지 확인하고 EasyOCR 모델을 설치합니다. OCR 서버는 GPU 전용이며 CUDA가 보이지 않으면 시작하지 않습니다. EasyOCR reader는 서버 시작 시 미리 로드되므로 서버 시작은 조금 길어질 수 있지만 첫 요약 작업의 OCR 대기 시간이 줄어듭니다.
 
 정상 실행 확인:
 
@@ -231,7 +231,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.8.xpi
+dist\local-page-summarizer-0.3.9.xpi
 ```
 
 ## 개발 검증
@@ -284,4 +284,5 @@ git diff --check
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
 - 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. 페이지네이션 뒤쪽 댓글을 자동으로 가져오지는 않습니다.
+- 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.

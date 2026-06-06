@@ -47,6 +47,7 @@ Start it with:
 ```
 
 The first run creates `.venv-ocr`, installs Python dependencies, checks that PyTorch can see a CUDA GPU, and downloads EasyOCR's Korean and English models. The OCR server is GPU-only and fails to start if CUDA is not available. The script prefers Python 3.11 because some EasyOCR dependencies are unreliable on Python 3.13. Keep this terminal open while using OCR.
+The OCR reader is loaded during server startup so the first page summary does not pay the EasyOCR model-loading cost.
 
 ## Notes
 
@@ -57,6 +58,7 @@ The first run creates `.venv-ocr`, installs Python dependencies, checks that PyT
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.
 - Long collected pages are analyzed in stages. The extension summarizes body text, comment candidates, image OCR, and YouTube transcripts separately, skips sections that are not present, then asks LM Studio for a final combined summary.
+- If chunk-level analysis results are already small enough, the extension skips an extra intermediate merge call and sends them directly to the final combined summary.
 - Long summaries run in a persistent Firefox background script. The popup can close, and you can keep using another browser, VSCode, terminal, or other apps while the job continues.
 - Saved entries are stored in `browser.storage.local`.
 - After each summary, a Markdown file is automatically downloaded under `Local Page Summarizer`.
