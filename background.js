@@ -1,6 +1,9 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
 const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
+const DEFAULT_MAX_CHARS = 8000;
+const MIN_MAX_CHARS = 1000;
+const SUMMARY_MAX_TOKENS = 1400;
 
 let activeJob = null;
 let activeAbortController = null;
@@ -70,7 +73,217 @@ function compactForPrompt(page, maxChars) {
   return body.slice(0, maxChars);
 }
 
+function normalizeMaxChars(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_MAX_CHARS;
+  }
+
+  return Math.max(MIN_MAX_CHARS, Math.floor(numeric));
+}
+
+function clampText(value, maxChars) {
+  const text = String(value || "").replace(/\r\n/g, "\n").trim();
+  if (!text || maxChars <= 0) {
+    return "";
+  }
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  const omitted = text.length - maxChars;
+  return `${text.slice(0, maxChars).trim()}\n[truncated: ${omitted.toLocaleString()} chars omitted]`;
+}
+
+function compactForContext(page, maxChars) {
+  const budget = normalizeMaxChars(maxChars);
+  const hasComments = Array.isArray(page.comments) && page.comments.length > 0;
+  const hasOcr = Array.isArray(page.ocrResults) && page.ocrResults.length > 0;
+  const hasTranscript = Boolean(page.transcript && page.transcript.text);
+
+  let sourceBudget = Math.floor(budget * 0.45);
+  if (!hasComments) sourceBudget += Math.floor(budget * 0.18);
+  if (!hasOcr) sourceBudget += Math.floor(budget * 0.17);
+  if (!hasTranscript) sourceBudget += Math.floor(budget * 0.10);
+
+  const commentsBudget = hasComments ? Math.floor(budget * 0.20) : 0;
+  const ocrBudget = hasOcr ? Math.floor(budget * 0.20) : 0;
+  const transcriptBudget = hasTranscript ? Math.floor(budget * 0.15) : 0;
+
+  const commentsText = hasComments
+    ? page.comments
+      .slice(0, 24)
+      .map((comment, index) => `${index + 1}. ${clampText(comment, 280)}`)
+      .join("\n")
+    : "";
+
+  const ocrText = hasOcr
+    ? page.ocrResults
+      .slice(0, 5)
+      .map((result) => [
+        `Image ${result.index}: ${result.width || "?"}x${result.height || "?"}`,
+        result.alt ? `ALT: ${clampText(result.alt, 160)}` : "",
+        result.url ? `URL: ${result.url}` : "",
+        result.text ? clampText(result.text, 900) : result.error ? `OCR error: ${result.error}` : "No OCR text"
+      ].filter(Boolean).join("\n"))
+      .join("\n\n")
+    : "";
+
+  const transcriptText = hasTranscript
+    ? clampText(page.transcript.text, transcriptBudget)
+    : "";
+
+  const sections = [
+    [
+      `Title: ${page.title || ""}`,
+      `URL: ${page.url || ""}`,
+      page.description ? `Description: ${page.description}` : "",
+      page.selectedOnly ? "Collected range: selected text" : "Collected range: page body"
+    ].filter(Boolean).join("\n"),
+    `[SOURCE TEXT]\n${clampText(page.text, sourceBudget)}`,
+    transcriptText ? `[YOUTUBE TRANSCRIPT]\n${transcriptText}` : "",
+    commentsText ? `[COMMENT CANDIDATES]\n${clampText(commentsText, commentsBudget)}` : "",
+    ocrText ? `[IMAGE OCR]\n${clampText(ocrText, ocrBudget)}` : ""
+  ].filter(Boolean).join("\n\n");
+
+  return clampText(sections, budget);
+}
+
+function buildSummaryMessages(content) {
+  return [
+    {
+      role: "system",
+      content: [
+        "You are a Korean personal research assistant.",
+        "Summarize the provided web page in Korean.",
+        "Ignore ads, menus, repeated boilerplate, and navigation text.",
+        "Separate claims from evidence, and be careful with community posts or unverified screenshots.",
+        "If comment candidates are present, quote only short notable comments that help interpret user reaction.",
+        "If OCR text is present, treat it as potentially noisy and mention only useful evidence from it.",
+        "If a YouTube transcript is present, summarize the main claims and flow."
+      ].join(" ")
+    },
+    {
+      role: "user",
+      content: [
+        "다음 페이지를 아래 형식으로 정리해줘.",
+        "",
+        "1. 핵심 요약",
+        "2. 장점",
+        "3. 단점",
+        "4. 댓글/사용자 반응",
+        "5. 눈여겨볼 댓글",
+        "   - 참고할 만한 댓글이 있으면 원문에서 핵심 문장만 짧게 인용하고, 왜 중요한지 한 줄로 설명",
+        "   - 댓글 후보가 없거나 의미 있는 댓글이 없으면 '특별히 인용할 댓글 없음'이라고 작성",
+        "6. 이미지 OCR에서 확인한 내용",
+        "7. YouTube transcript에서 확인한 내용",
+        "8. 구매 또는 판단 시 주의점",
+        "9. 출처에서 확인해야 할 부분",
+        "",
+        content
+      ].join("\n")
+    }
+  ];
+}
+
+async function requestSummaryCompletion(model, content, signal) {
+  const response = await fetch(LM_STUDIO_ENDPOINT, {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      messages: buildSummaryMessages(content),
+      temperature: 0.2,
+      max_tokens: SUMMARY_MAX_TOKENS,
+      stream: false
+    })
+  });
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      errorText: await response.text()
+    };
+  }
+
+  const data = await response.json();
+  const summary = data && data.choices && data.choices[0] && data.choices[0].message
+    ? data.choices[0].message.content
+    : "";
+
+  if (!summary) {
+    return {
+      ok: false,
+      status: response.status,
+      errorText: "LM Studio response did not contain a summary."
+    };
+  }
+
+  return {
+    ok: true,
+    summary: summary.trim()
+  };
+}
+
+function isContextLengthError(errorText) {
+  return /context length|n_keep|tokens to keep|too many tokens|maximum context/i.test(String(errorText || ""));
+}
+
+async function summarizeWithLMStudioSafe(page, settings, signal) {
+  const model = await resolveModelName(settings.model, signal);
+  const maxChars = normalizeMaxChars(settings.maxChars);
+  const attempts = [...new Set([
+    maxChars,
+    Math.min(8000, Math.floor(maxChars / 2)),
+    4000,
+    2000
+  ].map((value) => Math.min(maxChars, value))
+    .filter((value) => value >= MIN_MAX_CHARS))]
+    .sort((a, b) => b - a);
+
+  let lastResult = null;
+  let promptChars = attempts[0];
+
+  for (const attemptChars of attempts) {
+    promptChars = attemptChars;
+    const content = compactForContext(page, promptChars);
+    lastResult = await requestSummaryCompletion(model, content, signal);
+
+    if (lastResult.ok) {
+      break;
+    }
+
+    if (!isContextLengthError(lastResult.errorText)) {
+      break;
+    }
+  }
+
+  if (!lastResult || !lastResult.ok) {
+    throw new Error(`LM Studio 요청 실패: ${lastResult ? lastResult.status : "unknown"} ${lastResult ? lastResult.errorText : ""}`);
+  }
+
+  if (promptChars < maxChars) {
+    return [
+      lastResult.summary,
+      "",
+      "---",
+      `참고: 원문이 모델 컨텍스트보다 길어서 입력을 ${promptChars.toLocaleString()}자로 줄여 다시 요약했습니다.`
+    ].join("\n");
+  }
+
+  return lastResult.summary;
+}
+
 async function summarizeWithLMStudio(page, settings, signal) {
+  return summarizeWithLMStudioSafe(page, settings, signal);
+}
+
+async function summarizeWithLMStudioLegacy(page, settings, signal) {
   const model = await resolveModelName(settings.model, signal);
   const maxChars = Math.max(1000, Number(settings.maxChars) || 24000);
   const content = compactForPrompt(page, maxChars);

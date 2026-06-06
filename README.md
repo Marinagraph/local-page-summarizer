@@ -28,6 +28,8 @@ http://127.0.0.1:2000/v1/chat/completions
 If LM Studio requires an exact model name, enter that model name in the popup's `Model` field.
 Set `Model` to `auto:gemma` to select the largest non-embedding Gemma model returned by LM Studio's `/v1/models` endpoint, such as `google/gemma-4-31b-qat`. You can also enter an exact model id or a partial model id manually when needed.
 
+The popup defaults `Max chars` to `8000` so models loaded with a 10k context can handle long pages, comments, OCR text, and transcript text more reliably. If LM Studio still reports a context-length error, the extension retries with a smaller prompt automatically.
+
 ## OCR server
 
 The extension can send large page images to a local OCR server at:
@@ -51,6 +53,7 @@ The first run creates `.venv-ocr`, installs Python dependencies, and downloads E
 - If likely comments are found, the summary asks the model to quote short notable comments for reference.
 - If OCR is enabled, the extension sends up to five large image URLs to the local OCR server and adds extracted text to the summary prompt.
 - On YouTube, open the transcript panel before collecting. Visible transcript segments are added to the summary prompt and Markdown export.
+- Long collected pages are compacted by section before they are sent to LM Studio, with separate budgets for page text, comments, OCR, and transcripts.
 - Long summaries run in a persistent Firefox background script. The popup can close, and you can keep using another browser, VSCode, terminal, or other apps while the job continues.
 - Saved entries are stored in `browser.storage.local`.
 - After each summary, a Markdown file is automatically downloaded under `Local Page Summarizer`.

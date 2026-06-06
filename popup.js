@@ -1,4 +1,7 @@
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
+const DEFAULT_MAX_CHARS = 8000;
+const MIN_MAX_CHARS = 1000;
+const LEGACY_DEFAULT_MAX_CHARS = 24000;
 const LEGACY_DEFAULT_MODELS = new Set([
   "local-model",
   "gemma-4-26b-a4b-it"
@@ -167,7 +170,10 @@ async function restoreSettings() {
     modelInput.value = LEGACY_DEFAULT_MODELS.has(settings.model) ? "auto:gemma" : settings.model;
   }
   if (settings.maxChars) {
-    maxCharsInput.value = settings.maxChars;
+    const savedMaxChars = Math.max(MIN_MAX_CHARS, Number(settings.maxChars) || DEFAULT_MAX_CHARS);
+    maxCharsInput.value = savedMaxChars >= LEGACY_DEFAULT_MAX_CHARS
+      ? DEFAULT_MAX_CHARS
+      : savedMaxChars;
   }
   if (typeof settings.ocrEnabled === "boolean") {
     ocrEnabledInput.checked = settings.ocrEnabled;
@@ -190,7 +196,7 @@ async function restoreSettings() {
 async function persistSettings() {
   const settings = {
     model: modelInput.value.trim() || "auto:gemma",
-    maxChars: Math.max(1000, Number(maxCharsInput.value) || 24000),
+    maxChars: Math.max(MIN_MAX_CHARS, Number(maxCharsInput.value) || DEFAULT_MAX_CHARS),
     ocrEnabled: ocrEnabledInput.checked,
     ocrEndpoint: ocrEndpointInput.value.trim() || DEFAULT_OCR_ENDPOINT
   };
