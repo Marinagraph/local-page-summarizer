@@ -6,6 +6,7 @@ const MIN_MAX_CHARS = 1000;
 const SECTION_SUMMARY_MAX_TOKENS = 520;
 const SECTION_MERGE_MAX_TOKENS = 650;
 const SUMMARY_MAX_TOKENS = 950;
+const KOREAN_REWRITE_MAX_TOKENS = 850;
 const SECTION_MERGE_SKIP_RATIO = 0.45;
 const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
 const MAX_LM_STUDIO_CONCURRENCY = 4;
@@ -362,6 +363,8 @@ function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) 
       content: [
         "너는 한국어 개인 리서치 보조자다.",
         "지금은 최종 요약 전 단계로, 페이지의 한 섹션만 분석한다.",
+        "모든 출력은 한국어 문장으로만 작성한다. 영어 항목명, 영문 병기, 번역 설명을 쓰지 않는다.",
+        "역할, 작업 설명, 프롬프트 해석, 내부 사고 과정을 출력하지 않는다.",
         "원문에 없는 내용을 추정하지 말고, 사실/주장/근거/불확실성을 구분한다.",
         "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 원문을 가짜나 조작이라고 판정하지 않는다.",
         "날짜가 미래인지 판단할 때는 [페이지 정보]의 현재 날짜만 기준으로 삼는다.",
@@ -395,6 +398,8 @@ function buildSectionMergeMessages(context, section, summaryText) {
       content: [
         "너는 한국어 개인 리서치 보조자다.",
         "같은 섹션을 여러 청크로 분석한 결과를 하나로 병합한다.",
+        "모든 출력은 한국어 문장으로만 작성한다. 영어 항목명, 영문 병기, 번역 설명을 쓰지 않는다.",
+        "역할, 작업 설명, 프롬프트 해석, 내부 사고 과정을 출력하지 않는다.",
         "중복을 제거하되, 서로 다른 근거와 중요한 반응은 잃지 않는다.",
         "최종 요약 입력용 재료만 남기고 10줄 이내로 압축한다."
       ].join(" ")
@@ -425,6 +430,8 @@ function buildFinalMessages(context, sectionSummaryText) {
       content: [
         "너는 한국어 개인 리서치 보조자다.",
         "섹션별 사전 분석을 종합해 최종 요약을 작성한다.",
+        "최종 출력은 반드시 한국어로만 작성한다. 영어 제목, 영어 설명, 괄호 속 영문 번역을 넣지 않는다.",
+        "역할, 작업 설명, 프롬프트 해석, 내부 사고 과정을 출력하지 않고 최종 결과만 작성한다.",
         "원문에 없는 사실을 만들지 말고, 페이지 안의 본문과 댓글 분위기를 근거로 정리한다.",
         "모델의 학습 시점, 기억, 사전 지식과 다르다는 이유로 원문을 가짜나 조작이라고 판정하지 않는다.",
         "날짜가 미래인지 판단할 때는 [페이지 정보]의 현재 날짜만 기준으로 삼는다.",
@@ -458,6 +465,44 @@ function buildFinalMessages(context, sectionSummaryText) {
         "",
         "[섹션별 분석]",
         sectionSummaryText
+      ].join("\n")
+    }
+  ];
+}
+
+function buildKoreanRewriteMessages(context, summaryText) {
+  return [
+    {
+      role: "system",
+      content: [
+        "너는 한국어 편집자다.",
+        "아래 요약문을 한국어 최종 결과로 다시 작성한다.",
+        "영어 제목, 영어 항목명, 괄호 속 영문 번역, 역할 설명, 작업 설명, 프롬프트 해석을 모두 제거한다.",
+        "원래 요약의 정보와 짧은 댓글 인용은 유지하되, 문장은 자연스러운 한국어로 바꾼다.",
+        "새 사실을 추가하지 않는다."
+      ].join(" ")
+    },
+    {
+      role: "user",
+      content: [
+        "[페이지 정보]",
+        context,
+        "",
+        "아래 텍스트가 영어 또는 영어/한국어 혼합이면 한국어로만 다시 작성해줘.",
+        "반드시 아래 번호 형식을 유지해줘.",
+        "",
+        "1. 핵심 요약",
+        "2. 장점",
+        "3. 단점",
+        "4. 댓글/사용자 반응",
+        "5. 눈여겨볼 댓글",
+        "6. 이미지 OCR에서 확인한 내용",
+        "7. YouTube transcript에서 확인한 내용",
+        "8. 구매 또는 판단 시 주의점",
+        "9. 출처에서 확인해야 할 부분",
+        "",
+        "[다시 작성할 텍스트]",
+        summaryText
       ].join("\n")
     }
   ];
@@ -597,6 +642,27 @@ function describeCompletionResponse(data) {
 function previewText(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.slice(0, 160);
+}
+
+function languageStats(text) {
+  const value = String(text || "");
+  const hangul = (value.match(/[가-힣]/g) || []).length;
+  const latin = (value.match(/[A-Za-z]/g) || []).length;
+  return { hangul, latin };
+}
+
+function needsKoreanRewrite(text) {
+  const value = String(text || "");
+  if (!value.trim()) {
+    return false;
+  }
+
+  const stats = languageStats(value);
+  if (stats.latin > Math.max(350, stats.hangul * 1.15)) {
+    return true;
+  }
+
+  return /Korean Personal Research Assistant|Core Summary|Pros|Cons|Comment\/User Reaction|Notable Comments|Image OCR Content|Task:|Role:/i.test(value);
 }
 
 function isContextLengthError(errorText) {
@@ -773,8 +839,34 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     totalTokens: finalResult.usage && finalResult.usage.total_tokens
   });
 
+  let summary = finalResult.summary;
+  if (needsKoreanRewrite(summary)) {
+    if (report) {
+      await report("LM Studio 한국어 결과 재작성 중...");
+    }
+
+    const rewritten = await requestContentWithRetry(
+      model,
+      summary,
+      signal,
+      maxChars,
+      KOREAN_REWRITE_MAX_TOKENS,
+      (content) => buildKoreanRewriteMessages(context, content),
+      scheduleRequest
+    );
+    lmTimings.push({
+      type: "final-rewrite",
+      section: "final",
+      elapsedMs: rewritten.elapsedMs,
+      promptTokens: rewritten.usage && rewritten.usage.prompt_tokens,
+      completionTokens: rewritten.usage && rewritten.usage.completion_tokens,
+      totalTokens: rewritten.usage && rewritten.usage.total_tokens
+    });
+    summary = rewritten.summary;
+  }
+
   return {
-    summary: finalResult.summary,
+    summary,
     lmTimings
   };
 }
