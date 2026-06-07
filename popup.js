@@ -136,6 +136,7 @@ function renderMetaFromSaved(saved) {
     saved.title,
     saved.url,
     `Transcript ${(saved.transcript?.segments || []).length.toLocaleString()} segments`,
+    `Text extractor ${saved.textSource || "selectors"}`,
     `본문 ${(saved.text || "").length.toLocaleString()}자`,
     `댓글 후보 ${(saved.comments || []).length.toLocaleString()}개`,
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,

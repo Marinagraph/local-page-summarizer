@@ -85,6 +85,140 @@ function getDcinsideCommentInfoRoot(item) {
   return item;
 }
 
+function getDefuddleConstructor() {
+  return (
+    (typeof globalThis !== "undefined" && globalThis.Defuddle) ||
+    (typeof window !== "undefined" && window.Defuddle) ||
+    (typeof self !== "undefined" && self.Defuddle) ||
+    null
+  );
+}
+
+function createDetachedDocumentClone() {
+  const cloned = document.implementation.createHTMLDocument(document.title || "");
+
+  if (document.head) {
+    cloned.head.innerHTML = document.head.innerHTML;
+  }
+  if (document.body) {
+    cloned.body.innerHTML = document.body.innerHTML;
+  }
+
+  const base = cloned.createElement("base");
+  base.href = location.href;
+  cloned.head.prepend(base);
+
+  return cloned;
+}
+
+function htmlToReadableText(html) {
+  const template = document.createElement("template");
+  template.innerHTML = String(html || "");
+
+  for (const element of template.content.querySelectorAll("br")) {
+    element.replaceWith("\n");
+  }
+
+  const blockSelector = [
+    "address",
+    "article",
+    "blockquote",
+    "dd",
+    "details",
+    "div",
+    "dl",
+    "dt",
+    "figcaption",
+    "figure",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "li",
+    "main",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "td",
+    "th",
+    "tr",
+    "ul"
+  ].join(",");
+
+  for (const element of template.content.querySelectorAll(blockSelector)) {
+    element.append("\n");
+  }
+
+  return cleanText(template.content.textContent || "");
+}
+
+function collectDefuddleTextSource(fallbackElement) {
+  if (isDcinsidePage() || isYouTubePage()) {
+    return null;
+  }
+
+  const DefuddleConstructor = getDefuddleConstructor();
+  if (!DefuddleConstructor || !document.body) {
+    return null;
+  }
+
+  try {
+    const cloned = createDetachedDocumentClone();
+    const result = new DefuddleConstructor(cloned, {
+      url: location.href,
+      includeReplies: false,
+      removeImages: false,
+      removeSmallImages: false,
+      useAsync: false
+    }).parse();
+    const text = htmlToReadableText(result && result.content);
+
+    if (text.length < 80) {
+      return null;
+    }
+
+    return {
+      text,
+      element: fallbackElement || null,
+      priority: 4,
+      extractor: "defuddle",
+      wordCount: result && result.wordCount,
+      title: result && result.title,
+      description: result && result.description
+    };
+  } catch (error) {
+    console.warn("Local Page Summarizer: Defuddle extraction failed", error);
+    return null;
+  }
+}
+
+function shouldUseDefuddleSource(defuddleSource, fallbackSource) {
+  if (!defuddleSource || !defuddleSource.text) {
+    return false;
+  }
+  if (!fallbackSource || !fallbackSource.text) {
+    return true;
+  }
+
+  const defuddleLength = defuddleSource.text.length;
+  const fallbackLength = fallbackSource.text.length;
+
+  if (defuddleLength < 200 && fallbackLength > defuddleLength * 2) {
+    return false;
+  }
+  if (fallbackLength >= 1000 && defuddleLength > fallbackLength * 3) {
+    return false;
+  }
+
+  return true;
+}
+
 function collectDcinsideComments() {
   if (!isDcinsidePage()) {
     return [];
@@ -513,7 +647,14 @@ function getBestTextSource() {
   }
 
   candidates.sort((a, b) => (b.priority - a.priority) || (b.text.length - a.text.length));
-  return candidates[0] || { text: cleanText(document.body.innerText || "") };
+  const selectorSource = candidates[0] || { text: cleanText(document.body.innerText || ""), element: document.body };
+  const defuddleSource = collectDefuddleTextSource(selectorSource.element);
+
+  if (shouldUseDefuddleSource(defuddleSource, selectorSource)) {
+    return defuddleSource;
+  }
+
+  return selectorSource;
 }
 
 function getDcinsideTextSource() {
@@ -647,6 +788,7 @@ function collectPage() {
     url: location.href,
     description: getMetaDescription(),
     text,
+    textSource: bestSource.extractor || "selectors",
     comments: collectLikelyComments(text),
     images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
     transcript,

@@ -46,6 +46,7 @@ async function collectPageFromTab(tabId) {
   try {
     return await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
   } catch (error) {
+    await browser.tabs.executeScript(tabId, { file: "vendor/defuddle.js" }).catch(() => {});
     await browser.tabs.executeScript(tabId, { file: "contentScript.js" });
     return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
   }
@@ -217,6 +218,7 @@ function pageContext(page) {
     `URL: ${page.url || ""}`,
     page.description ? `설명: ${page.description}` : "",
     page.selectedOnly ? "수집 범위: 사용자가 선택한 텍스트" : "수집 범위: 페이지 본문",
+    `본문 추출: ${page.textSource || "selectors"}`,
     `본문 길이: ${(page.text || "").length.toLocaleString()}자`,
     `댓글 후보: ${(page.comments || []).length.toLocaleString()}개`,
     `이미지 후보: ${(page.images || []).length.toLocaleString()}개`,
@@ -1299,6 +1301,7 @@ function toMarkdown(saved) {
     "",
     `- URL: ${saved.url}`,
     `- Summarizer version: ${saved.summarizerVersion || extensionVersion()}`,
+    `- Text extractor: ${saved.textSource || "selectors"}`,
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,

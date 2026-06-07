@@ -57,8 +57,9 @@ OCR image downloads are performed in parallel, while EasyOCR recognition stays G
 
 - If text is selected on the page, the extension summarizes the selected text.
 - If nothing is selected, it summarizes the visible page body.
+- On general article/blog/review pages, the extension first tries the bundled Defuddle extractor for cleaner body text, then falls back to the existing selector-based extractor when Defuddle returns too little or suspiciously large content.
 - If likely comments are found, all currently visible comment candidates are analyzed. The extension does not fetch additional paginated comment pages.
-- On DCInside, rendered comment rows are collected from the visible comment list. If the row-based extraction fails, the extension falls back to parsing the visible `전체 댓글 ...개` text block.
+- On DCInside, rendered comment rows are collected only from the real visible `ul.cmt_list.add` comment list. Image-adjacent reaction text is not treated as comments.
 - If OCR is enabled, the extension sends up to five large image URLs found inside detected content containers to the local OCR server and adds extracted text to the summary prompt. It does not fall back to scanning every image in the page body, and it skips logos, avatars, banners, sidebars, comments, and reply areas. Markdown exports include OCR timing so slow pages can be diagnosed later.
 - For DCInside `viewimage.php` images, the extension keeps the original page image URL and lets the OCR server fetch it with the page URL as `Referer`, because direct background fetches can return 403 even when the image is visible in the page.
 - For DCInside pages with both rendered image URLs and `imgPop` popup URLs, the rendered `dcimg`/`dccdn` URL is preferred for OCR. If the first URL returns an HTML block page, the OCR server retries the alternate original/linked URLs before reporting failure.

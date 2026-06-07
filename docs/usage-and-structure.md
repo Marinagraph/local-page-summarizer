@@ -54,7 +54,8 @@ dist\
 : Firefox 툴바 버튼을 눌렀을 때 열리는 팝업 UI입니다. 모델명, 최대 청크 크기, OCR 사용 여부, OCR endpoint를 설정하고 작업 시작/상태 표시/Markdown 내보내기를 담당합니다. 긴 요약 작업 자체는 popup에서 돌리지 않습니다.
 
 `contentScript.js`
-: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 렌더링된 댓글 행을 우선 수집하고, 실패하면 보이는 `전체 댓글 ...개` 텍스트 구간을 파싱합니다. 이미지 후보는 감지된 본문 컨테이너 안에서만 수집하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 제외합니다.
+: General page body extraction tries the bundled `vendor/defuddle.js` first, then falls back to the existing selector-based extractor if the Defuddle result is too short or suspiciously large. DCInside and YouTube keep their site-specific collectors.
+: 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 본문과 댓글 모두 전용 DOM 수집기를 사용하며, 댓글은 실제 `ul.cmt_list.add` 댓글 목록만 수집합니다. 이미지 후보는 감지된 본문 컨테이너 안에서만 수집하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 제외합니다.
 
 `background.js`
 : 핵심 작업자입니다. popup에서 요청을 받으면 현재 탭에서 수집한 데이터를 받아 OCR 서버와 LM Studio를 호출하고, 결과를 `browser.storage.local`에 저장한 뒤 Markdown 파일을 다운로드합니다.
@@ -225,8 +226,13 @@ $tmpZip=Join-Path $outDir "local-page-summarizer-$version.zip"
 $xpi=Join-Path $outDir "local-page-summarizer-$version.xpi"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 Remove-Item -LiteralPath $tmpZip,$xpi -Force -ErrorAction SilentlyContinue
-$files=@('manifest.json','popup.html','popup.css','popup.js','contentScript.js','background.js','README.md')
-Compress-Archive -Path ($files | ForEach-Object { Join-Path $src $_ }) -DestinationPath $tmpZip -Force
+$files=@('manifest.json','popup.html','popup.css','popup.js','contentScript.js','background.js','README.md','vendor')
+Push-Location $src
+try {
+  Compress-Archive -Path $files -DestinationPath $tmpZip -Force
+} finally {
+  Pop-Location
+}
 Move-Item -LiteralPath $tmpZip -Destination $xpi -Force
 tar -tf $xpi
 ```
@@ -234,7 +240,7 @@ tar -tf $xpi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.24.xpi
+dist\local-page-summarizer-0.3.25.xpi
 ```
 
 ## 개발 검증
@@ -274,6 +280,7 @@ git diff --check
 : 디시 이미지는 직접 접근이 막히는 경우가 많습니다. 최신 버전은 OCR 서버가 `Referer`를 붙여 가져오게 처리합니다. OCR 서버가 실행 중인지 먼저 확인합니다.
 
 `DCInside 댓글이 요약에 약하게 반영됨`
+: Current behavior: comments are collected only from the real visible `ul.cmt_list.add` comment list. Image-adjacent reaction text is not treated as comments.
 : 최신 버전은 `.comment_box` 안의 렌더링된 댓글 행을 직접 수집합니다. 그래도 댓글 후보가 0개로 보이면 페이지가 댓글을 아직 렌더링하지 않은 상태일 수 있으므로 댓글이 화면에 보인 뒤 다시 실행합니다.
 
 `popup을 닫으면 작업이 끊기는 문제`
