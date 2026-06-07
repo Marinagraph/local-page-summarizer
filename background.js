@@ -16,6 +16,7 @@ const MAX_LM_STUDIO_CONCURRENCY = 4;
 let activeJob = null;
 let activeAbortController = null;
 const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
+const fallbackModelCache = new Map();
 
 function storageKeyFor(url) {
   return `page:${url}`;
@@ -536,6 +537,10 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
       messages,
       temperature: 0.2,
       max_tokens: maxTokens,
+      chat_template_kwargs: {
+        enable_thinking: false,
+        enableThinking: false
+      },
       stream: false
     })
   });
@@ -555,6 +560,7 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
     return {
       ok: false,
       status: response.status,
+      errorKind: hasReasoningOnlyCompletion(data) ? "reasoning_only" : "empty_summary",
       errorText: `LM Studio response did not contain a summary. ${describeCompletionResponse(data)}`
     };
   }
@@ -562,6 +568,7 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
   return {
     ok: true,
     summary,
+    model: data && data.model ? data.model : model,
     usage: data && data.usage ? data.usage : null,
     elapsedMs: Date.now() - started
   };
@@ -729,6 +736,20 @@ function describeCompletionResponse(data) {
   }
 }
 
+function hasReasoningOnlyCompletion(data) {
+  const choices = Array.isArray(data && data.choices) ? data.choices : [];
+  const hasReasoning = choices.some((choice) => {
+    const message = choice && choice.message ? choice.message : {};
+    return !!extractTextValue(message.reasoning_content || message.reasoning);
+  });
+  const hasVisibleContent = choices.some((choice) => {
+    const message = choice && choice.message ? choice.message : {};
+    return !!extractTextValue(message.content || message.response || choice.text || choice.content);
+  });
+
+  return hasReasoning && !hasVisibleContent;
+}
+
 function previewText(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.slice(0, 160);
@@ -780,14 +801,32 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
 
   for (const attemptChars of retryCharBudgets(maxChars)) {
     promptChars = attemptChars;
+    const messages = buildMessages(clampText(content, promptChars));
     lastResult = await scheduleRequest(
       () => requestChatCompletion(
         model,
-        buildMessages(clampText(content, promptChars)),
+        messages,
         signal,
         maxTokens
       )
     );
+
+    if (!lastResult.ok && lastResult.errorKind === "reasoning_only") {
+      const fallbackModel = await findNonThinkingFallbackModel(model, signal);
+      if (fallbackModel && fallbackModel !== model) {
+        const fallbackResult = await scheduleRequest(
+          () => requestChatCompletion(
+            fallbackModel,
+            messages,
+            signal,
+            maxTokens
+          )
+        );
+        if (fallbackResult.ok || fallbackResult.errorKind !== "reasoning_only") {
+          lastResult = fallbackResult;
+        }
+      }
+    }
 
     if (lastResult.ok) {
       break;
@@ -805,6 +844,7 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
   return {
     summary: lastResult.summary,
     promptChars,
+    model: lastResult.model || model,
     usage: lastResult.usage || null,
     elapsedMs: lastResult.elapsedMs || 0
   };
@@ -876,7 +916,9 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
 }
 
 async function summarizeWithLMStudio(page, settings, signal, report) {
-  const model = await resolveModelName(settings.model, signal);
+  const resolvedModel = await resolveModelName(settings.model, signal);
+  const fallbackModel = await findNonThinkingFallbackModel(resolvedModel, signal);
+  const model = fallbackModel || resolvedModel;
   const maxChars = normalizeMaxChars(settings.maxChars);
   const context = pageContext(page);
   const sections = buildAnalysisSections(page, maxChars);
@@ -1001,6 +1043,60 @@ async function resolveModelName(configuredModel, signal) {
   }
 
   return model.id;
+}
+
+async function findNonThinkingFallbackModel(primaryModel, signal) {
+  const modelId = String(primaryModel || "");
+  const cacheKey = modelId.toLowerCase();
+  if (fallbackModelCache.has(cacheKey)) {
+    return fallbackModelCache.get(cacheKey);
+  }
+
+  if (!/qat|thinking|reason/i.test(modelId)) {
+    fallbackModelCache.set(cacheKey, "");
+    return "";
+  }
+
+  let fallback = "";
+  try {
+    const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
+    if (!response.ok) {
+      fallbackModelCache.set(cacheKey, "");
+      return "";
+    }
+
+    const data = await response.json();
+    const models = (Array.isArray(data.data) ? data.data : [])
+      .map((item) => String(item.id || ""))
+      .filter((id) => id && !/embedding|embed/i.test(id));
+    const primarySize = extractModelSizeB(modelId);
+    const lowerPrimary = modelId.toLowerCase();
+    const preferred = models.filter((id) => {
+      const lower = id.toLowerCase();
+      if (lower === lowerPrimary || /qat|thinking|reason/i.test(lower)) {
+        return false;
+      }
+
+      if (lowerPrimary.includes("gemma") && !lower.includes("gemma")) {
+        return false;
+      }
+
+      if (primarySize && extractModelSizeB(id) && extractModelSizeB(id) !== primarySize) {
+        return false;
+      }
+
+      return /(?:^|[-_/])it(?:$|[-_/])|instruct|uncensored/i.test(lower);
+    });
+
+    fallback = preferred.length
+      ? pickBestModel(preferred.map((id) => ({ id }))).id
+      : "";
+  } catch (error) {
+    fallback = "";
+  }
+
+  fallbackModelCache.set(cacheKey, fallback);
+  return fallback;
 }
 
 function pickBestModel(models) {
