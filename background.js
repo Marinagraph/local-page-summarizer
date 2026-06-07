@@ -7,6 +7,8 @@ const SECTION_SUMMARY_MAX_TOKENS = 520;
 const SECTION_MERGE_MAX_TOKENS = 650;
 const SUMMARY_MAX_TOKENS = 950;
 const KOREAN_REWRITE_MAX_TOKENS = 850;
+const OUTPUT_START_MARKER = "<<<SUMMARY_OUTPUT_START>>>";
+const OUTPUT_END_MARKER = "<<<SUMMARY_OUTPUT_END>>>";
 const SECTION_MERGE_SKIP_RATIO = 0.45;
 const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
 const MAX_LM_STUDIO_CONCURRENCY = 4;
@@ -356,6 +358,15 @@ function sectionOutputRules(section) {
   ];
 }
 
+function outputMarkerRules() {
+  return [
+    `최종으로 저장할 답변은 반드시 ${OUTPUT_START_MARKER} 줄 다음부터 작성한다.`,
+    `답변이 끝나면 반드시 ${OUTPUT_END_MARKER} 줄을 작성한다.`,
+    "마커 밖에는 역할 설명, 작업 설명, 프롬프트 해석, 내부 사고 과정을 쓰지 않는다.",
+    "마커 안쪽에는 한국어 결과만 작성한다."
+  ];
+}
+
 function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) {
   return [
     {
@@ -383,6 +394,7 @@ function buildSectionMessages(context, section, chunk, chunkIndex, totalChunks) 
         "",
         "출력 규칙:",
         ...sectionOutputRules(section),
+        ...outputMarkerRules(),
         "",
         "[원문]",
         chunk
@@ -416,6 +428,7 @@ function buildSectionMergeMessages(context, section, summaryText) {
         "아래 청크별 분석을 하나의 섹션 분석으로 병합해줘.",
         "짧은 인용은 유지하되 너무 긴 원문 복사는 하지 마.",
         "최종 답변 형식으로 꾸미지 말고 핵심 재료만 bullet로 남겨줘.",
+        ...outputMarkerRules(),
         "",
         summaryText
       ].join("\n")
@@ -447,6 +460,7 @@ function buildFinalMessages(context, sectionSummaryText) {
         context,
         "",
         "다음 섹션별 분석을 바탕으로 최종 결과를 아래 형식으로 정리해줘.",
+        ...outputMarkerRules(),
         "",
         "1. 핵심 요약",
         "2. 장점",
@@ -490,6 +504,7 @@ function buildKoreanRewriteMessages(context, summaryText) {
         "",
         "아래 텍스트가 영어 또는 영어/한국어 혼합이면 한국어로만 다시 작성해줘.",
         "반드시 아래 번호 형식을 유지해줘.",
+        ...outputMarkerRules(),
         "",
         "1. 핵심 요약",
         "2. 장점",
@@ -553,14 +568,18 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
 }
 
 function extractCompletionText(data) {
-  const directText = extractTextValue(data && (data.output_text || data.text || data.content));
+  const directText = cleanCompletionText(extractTextValue(data && (data.output_text || data.text || data.content)), {
+    allowUnmarked: true
+  });
   if (directText) {
     return directText;
   }
 
   const outputs = Array.isArray(data && data.output) ? data.output : [];
   for (const output of outputs) {
-    const text = extractTextValue(output && (output.content || output.text));
+    const text = cleanCompletionText(extractTextValue(output && (output.content || output.text)), {
+      allowUnmarked: true
+    });
     if (text) {
       return text;
     }
@@ -569,18 +588,32 @@ function extractCompletionText(data) {
   const choices = Array.isArray(data && data.choices) ? data.choices : [];
   for (const choice of choices) {
     const message = choice && choice.message ? choice.message : {};
-    const candidates = [
+    const visibleCandidates = [
       message.content,
-      message.reasoning_content,
-      message.reasoning,
       message.response,
       choice.text,
       choice.content,
       choice.delta && choice.delta.content
     ];
 
-    for (const candidate of candidates) {
-      const text = extractTextValue(candidate);
+    for (const candidate of visibleCandidates) {
+      const text = cleanCompletionText(extractTextValue(candidate), {
+        allowUnmarked: true
+      });
+      if (text) {
+        return text;
+      }
+    }
+
+    const reasoningCandidates = [
+      message.reasoning_content,
+      message.reasoning
+    ];
+
+    for (const candidate of reasoningCandidates) {
+      const text = cleanCompletionText(extractTextValue(candidate), {
+        allowUnmarked: false
+      });
       if (text) {
         return text;
       }
@@ -588,6 +621,63 @@ function extractCompletionText(data) {
   }
 
   return "";
+}
+
+function cleanCompletionText(text, options = {}) {
+  const value = String(text || "").trim();
+  if (!value) {
+    return "";
+  }
+
+  const marked = extractMarkedOutput(value);
+  if (marked) {
+    return normalizeCompletionText(marked);
+  }
+
+  if (!options.allowUnmarked) {
+    const numbered = extractKoreanNumberedSections(value);
+    return numbered ? normalizeCompletionText(numbered) : "";
+  }
+
+  return normalizeCompletionText(value);
+}
+
+function extractMarkedOutput(text) {
+  const value = String(text || "");
+  const start = value.indexOf(OUTPUT_START_MARKER);
+  if (start < 0) {
+    return "";
+  }
+
+  const contentStart = start + OUTPUT_START_MARKER.length;
+  const end = value.indexOf(OUTPUT_END_MARKER, contentStart);
+  return (end >= 0 ? value.slice(contentStart, end) : value.slice(contentStart)).trim();
+}
+
+function extractKoreanNumberedSections(text) {
+  const value = String(text || "");
+  const matches = [...value.matchAll(/(?:^|\n)\s*(?:[*-]\s*)?(?:\*{1,2})?\s*1[.)]\s*핵심\s*요약/gi)];
+  if (!matches.length) {
+    return "";
+  }
+
+  const match = matches[matches.length - 1];
+  return value.slice(match.index).trim();
+}
+
+function normalizeCompletionText(text) {
+  return String(text || "")
+    .replaceAll(OUTPUT_START_MARKER, "")
+    .replaceAll(OUTPUT_END_MARKER, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/^\s*\*\s+\*(\d+[.)]\s*[^:\n]+):\*\s*/gm, "$1\n")
+    .replace(/^\s*(?:[*-]\s*)?\*{1,2}\s*(\d+[.)]\s*[^*\n:]+)\*{1,2}\s*:\s*/gm, "$1\n")
+    .replace(/\s*\((?:Core Summary|Pros|Cons|Comments?\/User Reaction|Notable Comments|Image OCR Content|YouTube transcript|Cautions?[^)]*|Things to check[^)]*|Image OCR|Body|Comments?)\)/gi, "")
+    .replace(/\s*\((?=[^)]*[A-Za-z])[^가-힣)]*\)/g, "")
+    .replace(/\.{2,}/g, ".")
+    .replace(/^\s*(?:Korean Personal Research Assistant|Korean Editor)\.\s*$/gim, "")
+    .replace(/^\s*(?:Rewrite a summary into a final Korean version|Summarize the provided section-by-section analysis into a final report)\.\s*$/gim, "")
+    .trim();
 }
 
 function extractTextValue(value) {
