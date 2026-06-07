@@ -16,34 +16,120 @@ function isDcinsidePage() {
   return /(^|\.)dcinside\.com$/i.test(location.hostname);
 }
 
+function getElementText(element) {
+  return cleanText(element ? element.innerText || element.textContent || "" : "");
+}
+
+function getDcinsideCommentRoots() {
+  const roots = [];
+  const seen = new Set();
+
+  function addRoots(selector) {
+    for (const root of document.querySelectorAll(selector)) {
+      if (seen.has(root)) {
+        continue;
+      }
+      if (!root.querySelector("li[id^='comment_li_'].ub-content, li[id^='reply_li_'].ub-content")) {
+        continue;
+      }
+      seen.add(root);
+      roots.push(root);
+    }
+  }
+
+  addRoots("ul.cmt_list.add");
+
+  if (!roots.length) {
+    addRoots("#comment_wrap ul.cmt_list");
+    addRoots(".comment_wrap ul.cmt_list");
+    addRoots(".comment_box ul.cmt_list");
+  }
+
+  return roots.filter((root) => {
+    if (root.classList.contains("add")) {
+      return true;
+    }
+
+    const container = root.closest("#comment_wrap, .comment_wrap, .comment_box") || root.parentElement;
+    return Boolean(container && container.querySelector(
+      ".bottom_paging_box, .cmt_paging, .btn_cmt_refresh, .btn_cmt_close"
+    ));
+  });
+}
+
+function isExcludedDcinsideCommentItem(item) {
+  const id = item.id || "";
+  const isComment = /^comment_li_\d+$/.test(id);
+  const isReply = /^reply_li_\d+$/.test(id);
+
+  if (!isComment && !isReply) {
+    return true;
+  }
+  if (id === "comment_li_0" || item.classList.contains("dory")) {
+    return true;
+  }
+  if (item.querySelector(".comment_dory, .dory_txt, .cmtboy, .cmt_write_box")) {
+    return true;
+  }
+
+  return false;
+}
+
+function getDcinsideCommentInfoRoot(item) {
+  for (const child of item.children) {
+    if (child.classList.contains("cmt_info") || child.classList.contains("reply_info")) {
+      return child;
+    }
+  }
+
+  return item;
+}
+
 function collectDcinsideComments() {
+  if (!isDcinsidePage()) {
+    return [];
+  }
+
   const comments = [];
   const seen = new Set();
-  const items = document.querySelectorAll(
-    ".comment_box .cmt_list > li.ub-content, " +
-    ".comment_box li[id^='comment_li_'], " +
-    ".comment_box li[id^='reply_li_']"
-  );
 
-  for (const item of items) {
-    const textElement = item.querySelector(".usertxt.ub-word, .usertxt");
-    const text = cleanText(textElement ? textElement.innerText || textElement.textContent || "" : "");
-    if (!text) {
-      continue;
+  for (const root of getDcinsideCommentRoots()) {
+    const items = root.querySelectorAll("li[id^='comment_li_'].ub-content, li[id^='reply_li_'].ub-content");
+
+    for (const item of items) {
+      if (isExcludedDcinsideCommentItem(item)) {
+        continue;
+      }
+
+      const infoRoot = getDcinsideCommentInfoRoot(item);
+      const textElement = infoRoot.querySelector(".cmt_txtbox .usertxt.ub-word, .cmt_txtbox .usertxt");
+      const text = getElementText(textElement);
+      if (!text) {
+        continue;
+      }
+
+      const writer = infoRoot.querySelector(".cmt_nickbox .gall_writer.ub-writer, .gall_writer.ub-writer");
+      const nick = getElementText(infoRoot.querySelector(".nickname em, .nickname")) ||
+        cleanText(writer ? writer.getAttribute("data-nick") || "" : "");
+      const ip = getElementText(infoRoot.querySelector(".ip"));
+      const date = getElementText(infoRoot.querySelector(".date_time, .gall_date"));
+      const prefixParts = [];
+
+      if ((item.id || "").startsWith("reply_li_")) {
+        prefixParts.push("답글");
+      }
+      prefixParts.push(...[nick, ip, date].filter(Boolean));
+
+      const prefix = prefixParts.join(" ");
+      const comment = prefix ? `${prefix}\n${text}` : text;
+
+      if (seen.has(comment)) {
+        continue;
+      }
+
+      seen.add(comment);
+      comments.push(comment);
     }
-
-    const nick = cleanText(item.querySelector(".nickname em, .nickname")?.innerText || "");
-    const ip = cleanText(item.querySelector(".ip")?.innerText || "");
-    const date = cleanText(item.querySelector(".date_time, .gall_date")?.innerText || "");
-    const prefix = [nick, ip, date].filter(Boolean).join(" ");
-    const comment = prefix ? `${prefix}\n${text}` : text;
-
-    if (seen.has(comment)) {
-      continue;
-    }
-
-    seen.add(comment);
-    comments.push(comment);
   }
 
   return comments;
@@ -108,6 +194,10 @@ function collectCommentsFromVisibleText(text) {
 
 function collectLikelyComments(pageText) {
   const dcinsideComments = collectDcinsideComments();
+  if (isDcinsidePage()) {
+    return dcinsideComments;
+  }
+
   if (dcinsideComments.length) {
     return dcinsideComments;
   }
