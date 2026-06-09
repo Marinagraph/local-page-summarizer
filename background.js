@@ -3,10 +3,11 @@ const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
-const SECTION_SUMMARY_MAX_TOKENS = 520;
-const SECTION_MERGE_MAX_TOKENS = 650;
-const SUMMARY_MAX_TOKENS = 950;
-const KOREAN_REWRITE_MAX_TOKENS = 850;
+const SECTION_SUMMARY_MAX_TOKENS = 900;
+const SECTION_MERGE_MAX_TOKENS = 1100;
+const SUMMARY_MAX_TOKENS = 1500;
+const KOREAN_REWRITE_MAX_TOKENS = 1300;
+const MAX_REASONING_RETRY_TOKENS = 2400;
 const OUTPUT_START_MARKER = "<<<SUMMARY_OUTPUT_START>>>";
 const OUTPUT_END_MARKER = "<<<SUMMARY_OUTPUT_END>>>";
 const SECTION_MERGE_SKIP_RATIO = 0.45;
@@ -312,15 +313,15 @@ function sectionSummaryMaxTokens(section) {
   }
 
   if (section.key === "comments") {
-    return 560;
+    return 950;
   }
 
   if (section.key === "ocr") {
-    return 380;
+    return 800;
   }
 
   if (section.key === "transcript") {
-    return 480;
+    return 950;
   }
 
   return SECTION_SUMMARY_MAX_TOKENS;
@@ -559,10 +560,11 @@ async function requestChatCompletion(model, messages, signal, maxTokens) {
   const summary = extractCompletionText(data);
 
   if (!summary) {
+    const reasoningOnly = hasReasoningOnlyCompletion(data);
     return {
       ok: false,
       status: response.status,
-      errorKind: hasReasoningOnlyCompletion(data) ? "reasoning_only" : "empty_summary",
+      errorKind: reasoningOnly ? "reasoning_only" : hasLengthLimitedCompletion(data) ? "length_limited" : "empty_summary",
       errorText: `LM Studio response did not contain a summary. ${describeCompletionResponse(data)}`
     };
   }
@@ -752,6 +754,11 @@ function hasReasoningOnlyCompletion(data) {
   return hasReasoning && !hasVisibleContent;
 }
 
+function hasLengthLimitedCompletion(data) {
+  const choices = Array.isArray(data && data.choices) ? data.choices : [];
+  return choices.some((choice) => String(choice && choice.finish_reason || "").toLowerCase() === "length");
+}
+
 function previewText(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.slice(0, 160);
@@ -797,6 +804,22 @@ function retryCharBudgets(maxChars) {
   return attempts;
 }
 
+function retryOutputTokenBudgets(maxTokens) {
+  const normalized = Math.max(256, Math.floor(Number(maxTokens) || SECTION_SUMMARY_MAX_TOKENS));
+  return [...new Set([
+    normalized,
+    Math.max(normalized + 512, Math.ceil(normalized * 1.75)),
+    Math.max(normalized + 900, Math.ceil(normalized * 2.5)),
+    MAX_REASONING_RETRY_TOKENS
+  ].map((value) => Math.min(MAX_REASONING_RETRY_TOKENS, value))
+    .filter((value) => value >= normalized))]
+    .sort((a, b) => a - b);
+}
+
+function isOutputBudgetRetryable(result) {
+  return result && (result.errorKind === "reasoning_only" || result.errorKind === "length_limited");
+}
+
 async function requestContentWithRetry(model, content, signal, maxChars, maxTokens, buildMessages, scheduleRequest) {
   let lastResult = null;
   let promptChars = normalizeMaxChars(maxChars);
@@ -804,29 +827,37 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
   for (const attemptChars of retryCharBudgets(maxChars)) {
     promptChars = attemptChars;
     const messages = buildMessages(clampText(content, promptChars));
-    lastResult = await scheduleRequest(
-      () => requestChatCompletion(
-        model,
-        messages,
-        signal,
-        maxTokens
-      )
-    );
+    const tokenBudgets = retryOutputTokenBudgets(maxTokens);
 
-    if (!lastResult.ok && lastResult.errorKind === "reasoning_only") {
-      const fallbackModel = await findNonThinkingFallbackModel(model, signal);
-      if (fallbackModel && fallbackModel !== model) {
-        const fallbackResult = await scheduleRequest(
-          () => requestChatCompletion(
-            fallbackModel,
-            messages,
-            signal,
-            maxTokens
-          )
-        );
-        if (fallbackResult.ok || fallbackResult.errorKind !== "reasoning_only") {
-          lastResult = fallbackResult;
+    for (const attemptTokens of tokenBudgets) {
+      lastResult = await scheduleRequest(
+        () => requestChatCompletion(
+          model,
+          messages,
+          signal,
+          attemptTokens
+        )
+      );
+
+      if (!lastResult.ok && lastResult.errorKind === "reasoning_only") {
+        const fallbackModel = await findNonThinkingFallbackModel(model, signal);
+        if (fallbackModel && fallbackModel !== model) {
+          const fallbackResult = await scheduleRequest(
+            () => requestChatCompletion(
+              fallbackModel,
+              messages,
+              signal,
+              attemptTokens
+            )
+          );
+          if (fallbackResult.ok || fallbackResult.errorKind !== "reasoning_only") {
+            lastResult = fallbackResult;
+          }
         }
+      }
+
+      if (lastResult.ok || !isOutputBudgetRetryable(lastResult)) {
+        break;
       }
     }
 
