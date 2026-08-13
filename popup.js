@@ -124,6 +124,10 @@ function toMarkdown(saved) {
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
+    ...(saved.danawaCollection ? [
+      `- Danawa product opinions: ${saved.danawaCollection.productOpinionCount} across ${saved.danawaCollection.productOpinionPages} pages`,
+      `- Danawa company reviews: ${saved.danawaCollection.companyReviewCount} across ${saved.danawaCollection.companyReviewPages} pages`
+    ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
     ] : []),
@@ -152,6 +156,9 @@ function renderMetaFromSaved(saved) {
     `Text extractor ${saved.textSource || "selectors"}`,
     `본문 ${(saved.text || "").length.toLocaleString()}자`,
     `댓글 후보 ${(saved.comments || []).length.toLocaleString()}개`,
+    saved.danawaCollection
+      ? `다나와 상품의견 ${saved.danawaCollection.productOpinionCount.toLocaleString()}개 / 쇼핑몰 후기 ${saved.danawaCollection.companyReviewCount.toLocaleString()}개`
+      : "",
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     saved.summarizerVersion ? `버전 ${saved.summarizerVersion}` : "",

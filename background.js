@@ -13,6 +13,9 @@ const OUTPUT_END_MARKER = "<<<SUMMARY_OUTPUT_END>>>";
 const SECTION_MERGE_SKIP_RATIO = 0.45;
 const DEFAULT_LM_STUDIO_CONCURRENCY = 2;
 const MAX_LM_STUDIO_CONCURRENCY = 4;
+const DANAWA_PAGE_SIZE = 100;
+const DANAWA_MAX_PAGES = 100;
+const DANAWA_FETCH_RETRIES = 3;
 
 let activeJob = null;
 let activeAbortController = null;
@@ -51,6 +54,299 @@ async function collectPageFromTab(tabId) {
     await browser.tabs.executeScript(tabId, { file: "contentScript.js" });
     return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
   }
+}
+
+function normalizeDanawaText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isDanawaProductCollection(page) {
+  if (!page || !page.danawa || !/^\d+$/.test(String(page.danawa.productCode || ""))) {
+    return false;
+  }
+
+  try {
+    const url = new URL(page.url);
+    return url.hostname === "prod.danawa.com" && url.pathname.startsWith("/info");
+  } catch {
+    return false;
+  }
+}
+
+function parseDanawaProductOpinions(html) {
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  const rows = [];
+
+  for (const item of parsed.querySelectorAll("[id^='danawa-prodBlog-productOpinion-list-self-']")) {
+    const itemId = item.id.replace("danawa-prodBlog-productOpinion-list-self-", "");
+    const contentInput = item.querySelector("[id^='danawa-prodBlog-productOpinion-content-text-']");
+    const contentElement = item.querySelector(".danawa-prodBlog-productOpinion-clazz-content");
+    const content = normalizeDanawaText(
+      (contentInput && contentInput.value) || (contentElement && contentElement.textContent) || ""
+    );
+    if (!content) {
+      continue;
+    }
+
+    const nickname = normalizeDanawaText(item.querySelector("[id^='danawa-prodBlog-productOpinion-nickname-']")?.textContent);
+    const date = normalizeDanawaText(item.querySelector(".cmt_head .date, .date")?.textContent);
+    const headText = normalizeDanawaText(item.querySelector(".head_text_name")?.textContent);
+    const depth = item.querySelector("[id^='danawa-prodBlog-productOpinion-list-depth-']")?.value;
+    const label = String(depth) === "2"
+      ? "다나와 상품의견 답글"
+      : headText && headText !== "의견"
+        ? `다나와 상품의견 (${headText})`
+        : "다나와 상품의견";
+    const metadata = [nickname, date].filter(Boolean).join(" | ");
+
+    rows.push({
+      key: `opinion:${itemId || rows.length}`,
+      text: `[${label}]${metadata ? ` ${metadata}` : ""}\n${content}`
+    });
+  }
+
+  return rows;
+}
+
+function parseDanawaCompanyReviews(html) {
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  const rows = [];
+
+  for (const contentWrap of parsed.querySelectorAll("[id^='danawa-prodBlog-companyReview-content-wrap-']")) {
+    const item = contentWrap.closest("li") || contentWrap.parentElement;
+    if (!item) {
+      continue;
+    }
+
+    const body = normalizeDanawaText(
+      contentWrap.querySelector(".atc")?.textContent || contentWrap.querySelector(".tit")?.textContent || ""
+    );
+    if (!body) {
+      continue;
+    }
+
+    const uidElement = item.querySelector(
+      "[id^='danawa-prodBlog-companyReview-button-block-'], [id^='danawa-prodBlog-companyReview-button-side-']"
+    );
+    const uid = uidElement ? uidElement.id.split("-").pop() : "";
+    const score = normalizeDanawaText(item.querySelector(".star_mask")?.textContent);
+    const mallImage = item.querySelector(".mall img[alt]");
+    const mall = normalizeDanawaText(mallImage?.getAttribute("alt") || item.querySelector(".mall")?.textContent);
+    const date = normalizeDanawaText(item.querySelector(".top_info .date, .date")?.textContent);
+    const name = normalizeDanawaText(item.querySelector(".top_info .name, .name")?.textContent);
+    const metadata = [score, mall, date, name].filter(Boolean).join(" | ");
+
+    rows.push({
+      key: `review:${uid || `${rows.length}:${body}`}`,
+      text: `[다나와 쇼핑몰 후기]${metadata ? ` ${metadata}` : ""}\n${body}`
+    });
+  }
+
+  return rows;
+}
+
+function danawaRequestUrl(page, kind, pageNumber) {
+  const info = page.danawa;
+  const endpoint = new URL(
+    kind === "opinion"
+      ? "/info/dpg/ajax/productOpinion.ajax.php"
+      : "/info/dpg/ajax/companyProductReview.ajax.php",
+    "https://prod.danawa.com"
+  );
+  const common = {
+    prodCode: info.productCode,
+    productCodes: info.productCodes || info.productCode,
+    page: String(pageNumber),
+    limit: String(DANAWA_PAGE_SIZE)
+  };
+  const params = kind === "opinion"
+    ? {
+      ...common,
+      keyword: "",
+      condition: "",
+      past: "N",
+      sort: "1",
+      headTextSeq: "0",
+      cate1Code: info.cate1Code || "",
+      cate2Code: info.cate2Code || "",
+      cate3Code: info.cate3Code || "",
+      makeDate: info.makeDate || ""
+    }
+    : {
+      ...common,
+      score: "0",
+      sortType: "",
+      onlyPhotoReview: "",
+      usefullScore: "Y",
+      innerKeyword: "",
+      subjectWord: "0",
+      subjectWordString: "",
+      subjectSimilarWordString: "",
+      pageType: "list"
+    };
+
+  for (const [key, value] of Object.entries(params)) {
+    endpoint.searchParams.set(key, value);
+  }
+  endpoint.searchParams.set("t", `${Date.now()}-${pageNumber}`);
+  return endpoint.href;
+}
+
+function throwIfDanawaCollectionAborted(signal) {
+  if (signal && signal.aborted) {
+    throw new Error("Summary job was cancelled.");
+  }
+}
+
+function waitForDanawaRetry(delayMs, signal) {
+  return new Promise((resolve, reject) => {
+    throwIfDanawaCollectionAborted(signal);
+    let settled = false;
+    const timer = setTimeout(() => {
+      settled = true;
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error("Summary job was cancelled."));
+    };
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    }
+  });
+}
+
+async function fetchDanawaPage(url, signal) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= DANAWA_FETCH_RETRIES; attempt += 1) {
+    throwIfDanawaCollectionAborted(signal);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "text/html,application/xhtml+xml" },
+        signal
+      });
+
+      if (response.ok) {
+        return response.text();
+      }
+
+      lastError = new Error(`Danawa request failed: ${response.status} ${response.statusText}`);
+      if (response.status < 500 && response.status !== 429) {
+        lastError.nonRetryable = true;
+        throw lastError;
+      }
+    } catch (error) {
+      if (signal && signal.aborted) {
+        throw error;
+      }
+      if (error && error.nonRetryable) {
+        throw error;
+      }
+      lastError = error;
+    }
+
+    if (attempt < DANAWA_FETCH_RETRIES) {
+      await waitForDanawaRetry(300 * attempt, signal);
+    }
+  }
+
+  throw lastError || new Error("Danawa request failed.");
+}
+
+async function collectDanawaDataset(page, kind, signal, onProgress) {
+  const parseRows = kind === "opinion" ? parseDanawaProductOpinions : parseDanawaCompanyReviews;
+  const rows = [];
+  const seen = new Set();
+  let pagesFetched = 0;
+
+  for (let pageNumber = 1; pageNumber <= DANAWA_MAX_PAGES; pageNumber += 1) {
+    const html = await fetchDanawaPage(danawaRequestUrl(page, kind, pageNumber), signal);
+    if (String(html || "").trim() === "NO_CONTENT") {
+      break;
+    }
+
+    const parsedRows = parseRows(html);
+    if (!parsedRows.length) {
+      break;
+    }
+
+    let added = 0;
+    for (const row of parsedRows) {
+      if (seen.has(row.key)) {
+        continue;
+      }
+      seen.add(row.key);
+      rows.push(row);
+      added += 1;
+    }
+
+    pagesFetched = pageNumber;
+    if (onProgress) {
+      await onProgress({ kind, count: rows.length, pagesFetched });
+    }
+    if (!added) {
+      break;
+    }
+    if (pageNumber === DANAWA_MAX_PAGES) {
+      throw new Error(`Danawa ${kind} collection exceeded ${DANAWA_MAX_PAGES} pages.`);
+    }
+  }
+
+  return { rows, pagesFetched };
+}
+
+async function enrichPageWithDanawaComments(page, signal, onProgress) {
+  if (!isDanawaProductCollection(page)) {
+    return page;
+  }
+
+  const progress = {
+    opinion: { count: 0, pagesFetched: 0 },
+    review: { count: 0, pagesFetched: 0 }
+  };
+  const reportProgress = async (update) => {
+    progress[update.kind] = update;
+    if (onProgress) {
+      await onProgress(
+        `다나와 전체 수집 중: 상품의견 ${progress.opinion.count.toLocaleString()}개 ` +
+        `(${progress.opinion.pagesFetched}페이지), 쇼핑몰 후기 ${progress.review.count.toLocaleString()}개 ` +
+        `(${progress.review.pagesFetched}페이지)`
+      );
+    }
+  };
+  const [opinions, reviews] = await Promise.all([
+    collectDanawaDataset(page, "opinion", signal, reportProgress),
+    collectDanawaDataset(page, "review", signal, reportProgress)
+  ]);
+  const comments = [...opinions.rows, ...reviews.rows].map((row) => row.text);
+
+  return {
+    ...page,
+    comments: comments.length ? comments : page.comments,
+    danawaCollection: {
+      productOpinionCount: opinions.rows.length,
+      productOpinionPages: opinions.pagesFetched,
+      companyReviewCount: reviews.rows.length,
+      companyReviewPages: reviews.pagesFetched,
+      totalCount: comments.length,
+      pageSize: DANAWA_PAGE_SIZE
+    }
+  };
 }
 
 function normalizeMaxChars(value) {
@@ -222,6 +518,9 @@ function pageContext(page) {
     `본문 추출: ${page.textSource || "selectors"}`,
     `본문 길이: ${(page.text || "").length.toLocaleString()}자`,
     `댓글 후보: ${(page.comments || []).length.toLocaleString()}개`,
+    page.danawaCollection
+      ? `다나와 전체 수집: 상품의견 ${page.danawaCollection.productOpinionCount.toLocaleString()}개, 쇼핑몰 후기 ${page.danawaCollection.companyReviewCount.toLocaleString()}개`
+      : "",
     `이미지 후보: ${(page.images || []).length.toLocaleString()}개`,
     `OCR 결과: ${(page.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     `YouTube transcript: ${page.transcript && page.transcript.text ? "있음" : "없음"}`
@@ -248,7 +547,7 @@ function buildAnalysisSections(page, maxChars) {
 
   if (Array.isArray(page.comments) && page.comments.length) {
     const commentEntries = page.comments.map((comment, index) => (
-      `${index + 1}. ${clampText(comment, 1200)}`
+      `${index + 1}. ${String(comment || "").trim()}`
     ));
     const commentChunks = splitEntriesIntoChunks(commentEntries, maxChars);
     if (commentChunks.length) {
@@ -1350,6 +1649,10 @@ function toMarkdown(saved) {
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
     `- Comment candidates: ${(saved.comments || []).length}`,
+    ...(saved.danawaCollection ? [
+      `- Danawa product opinions: ${saved.danawaCollection.productOpinionCount} across ${saved.danawaCollection.productOpinionPages} pages`,
+      `- Danawa company reviews: ${saved.danawaCollection.companyReviewCount} across ${saved.danawaCollection.companyReviewPages} pages`
+    ] : []),
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
     ...(saved.ocrTiming ? [
@@ -1400,6 +1703,14 @@ async function runSummaryJob(request) {
 
   try {
     let page = await collectPageFromTab(request.tabId);
+    if (isDanawaProductCollection(page)) {
+      await setJobState({ message: "다나와 전체 상품의견과 쇼핑몰 후기 수집 중..." });
+      page = await enrichPageWithDanawaComments(
+        page,
+        signal,
+        (message) => setJobState({ message })
+      );
+    }
     await setJobState({
       message: "페이지 수집 완료",
       title: page.title,

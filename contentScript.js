@@ -24,6 +24,68 @@ function isDanawaPage() {
   return /(^|\.)danawa\.com$/i.test(location.hostname);
 }
 
+function getDanawaInlineScriptText() {
+  return Array.from(document.scripts)
+    .filter((script) => !script.src)
+    .map((script) => script.textContent || "")
+    .join("\n");
+}
+
+function firstDanawaSetting(scriptText, patterns) {
+  for (const pattern of patterns) {
+    const match = scriptText.match(pattern);
+    if (match && match[1]) {
+      return cleanText(match[1]);
+    }
+  }
+  return "";
+}
+
+function bestDanawaProductCodes(scriptText, fallback) {
+  const candidates = Array.from(scriptText.matchAll(/\bproductCodes\s*:\s*["']([\d,]+)["']/gi))
+    .map((match) => match[1])
+    .filter((value) => /^[\d,]+$/.test(value));
+
+  candidates.sort((a, b) => {
+    const countDifference = b.split(",").length - a.split(",").length;
+    return countDifference || b.length - a.length;
+  });
+  return candidates[0] || fallback;
+}
+
+function collectDanawaMetadata() {
+  if (location.hostname !== "prod.danawa.com" || !location.pathname.startsWith("/info")) {
+    return null;
+  }
+
+  const scriptText = getDanawaInlineScriptText();
+  const productCode = cleanText(new URL(location.href).searchParams.get("pcode") || "") ||
+    firstDanawaSetting(scriptText, [/\bprodCode\s*:\s*["']?(\d+)/i, /\bnProductCode\s*:\s*["']?(\d+)/i]);
+
+  if (!/^\d+$/.test(productCode)) {
+    return null;
+  }
+
+  const categorySetting = (level) => firstDanawaSetting(scriptText, [
+    new RegExp(`\\bnCategoryCode${level}\\s*:\\s*["'](\\d+)["']`, "i"),
+    new RegExp(`\\bcate${level}Code\\s*:\\s*["'](\\d+)["']`, "i")
+  ]);
+  const productCodes = bestDanawaProductCodes(scriptText, productCode);
+  const makeDate = firstDanawaSetting(scriptText, [
+    /\bmakeDate\s*:\s*["']([^"']+)["']/i,
+    /\bvar\s+makeDate\s*=\s*["']([^"']+)["']/i
+  ]);
+
+  return {
+    productCode,
+    productCodes,
+    cate1Code: categorySetting(1),
+    cate2Code: categorySetting(2),
+    cate3Code: categorySetting(3),
+    makeDate
+  };
+}
+
 function getElementText(element) {
   return cleanText(element ? element.innerText || element.textContent || "" : "");
 }
@@ -1019,6 +1081,7 @@ function collectPage() {
     comments: collectLikelyComments(text),
     images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
     transcript,
+    danawa: collectDanawaMetadata(),
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };

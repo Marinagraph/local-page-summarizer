@@ -227,7 +227,7 @@ The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.29.xpi
+dist\local-page-summarizer-0.3.30.xpi
 ```
 
 ## 개발 검증
@@ -283,6 +283,6 @@ git diff --check
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
-- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. 페이지네이션 뒤쪽 댓글을 자동으로 가져오지는 않습니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. 단, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져와 전체 분석합니다.
 - 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.
