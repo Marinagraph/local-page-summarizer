@@ -139,12 +139,15 @@ function getDefuddleConstructor() {
 function createDetachedDocumentClone() {
   const cloned = document.implementation.createHTMLDocument(document.title || "");
 
-  if (document.head) {
-    cloned.head.innerHTML = document.head.innerHTML;
+  function importChildren(source, target) {
+    target.replaceChildren();
+    for (const child of source.childNodes) {
+      target.appendChild(cloned.importNode(child, true));
+    }
   }
-  if (document.body) {
-    cloned.body.innerHTML = document.body.innerHTML;
-  }
+
+  if (document.head) importChildren(document.head, cloned.head);
+  if (document.body) importChildren(document.body, cloned.body);
 
   const base = cloned.createElement("base");
   base.href = location.href;
@@ -154,10 +157,10 @@ function createDetachedDocumentClone() {
 }
 
 function htmlToReadableText(html) {
-  const template = document.createElement("template");
-  template.innerHTML = String(html || "");
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  const content = parsed.body;
 
-  for (const element of template.content.querySelectorAll("br")) {
+  for (const element of content.querySelectorAll("br")) {
     element.replaceWith("\n");
   }
 
@@ -193,11 +196,11 @@ function htmlToReadableText(html) {
     "ul"
   ].join(",");
 
-  for (const element of template.content.querySelectorAll(blockSelector)) {
+  for (const element of content.querySelectorAll(blockSelector)) {
     element.append("\n");
   }
 
-  return cleanText(template.content.textContent || "");
+  return cleanText(content.textContent || "");
 }
 
 function collectDefuddleTextSource(fallbackElement) {

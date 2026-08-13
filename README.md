@@ -58,6 +58,7 @@ OCR image downloads are performed in parallel, while EasyOCR recognition stays G
 - If text is selected on the page, the extension summarizes the selected text.
 - If nothing is selected, it summarizes the visible page body.
 - On general article/blog/review pages, the extension first tries the bundled Defuddle extractor for cleaner body text, then falls back to the existing selector-based extractor when Defuddle returns too little or suspiciously large content.
+- Page HTML is copied with DOM node cloning and parsed in an inert document. Extracted HTML is never assigned to the active page with `innerHTML`.
 - If likely comments are found, all currently visible comment candidates are analyzed. The extension does not fetch additional paginated comment pages.
 - On DCInside, rendered comment rows are collected only from the real visible `ul.cmt_list.add` comment list. Image-adjacent reaction text is not treated as comments.
 - On Instagram and Danawa, site-specific collectors read the currently rendered comment, review, and product-opinion rows without fetching another page.

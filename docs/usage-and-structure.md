@@ -227,7 +227,7 @@ The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.28.xpi
+dist\local-page-summarizer-0.3.29.xpi
 ```
 
 ## 개발 검증
