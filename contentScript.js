@@ -16,8 +16,50 @@ function isDcinsidePage() {
   return /(^|\.)dcinside\.com$/i.test(location.hostname);
 }
 
+function isInstagramPage() {
+  return /(^|\.)instagram\.com$/i.test(location.hostname);
+}
+
+function isDanawaPage() {
+  return /(^|\.)danawa\.com$/i.test(location.hostname);
+}
+
 function getElementText(element) {
   return cleanText(element ? element.innerText || element.textContent || "" : "");
+}
+
+function isRenderedElement(element) {
+  if (!element || !element.isConnected) {
+    return false;
+  }
+
+  const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+  if (style && (style.display === "none" || style.visibility === "hidden")) {
+    return false;
+  }
+
+  return Boolean(element.getClientRects().length || element.offsetWidth || element.offsetHeight);
+}
+
+function pushUniqueComment(comments, seen, value) {
+  const comment = cleanText(value);
+  if (!comment || seen.has(comment)) {
+    return;
+  }
+
+  seen.add(comment);
+  comments.push(comment);
+}
+
+function ownRenderedItemText(element) {
+  const clone = element.cloneNode(true);
+  for (const nested of clone.querySelectorAll("li li, [role='listitem'] [role='listitem']")) {
+    nested.remove();
+  }
+  for (const ignored of clone.querySelectorAll("script, style, svg")) {
+    ignored.remove();
+  }
+  return cleanText(clone.innerText || clone.textContent || "");
 }
 
 function getDcinsideCommentRoots() {
@@ -269,6 +311,180 @@ function collectDcinsideComments() {
   return comments;
 }
 
+function getInstagramProfileName(element) {
+  for (const anchor of element.querySelectorAll("a[href]")) {
+    let pathname = "";
+    try {
+      pathname = new URL(anchor.getAttribute("href"), location.href).pathname;
+    } catch {
+      continue;
+    }
+
+    if (!/^\/[A-Za-z0-9._]+\/$/.test(pathname)) {
+      continue;
+    }
+
+    const name = getElementText(anchor);
+    if (name) {
+      return name;
+    }
+  }
+
+  return "";
+}
+
+function isInstagramUiLine(line) {
+  return (
+    /^(reply|view replies|hide replies|see translation|liked?|likes?|more|report|follow|following)$/i.test(line) ||
+    /^(\d+\s+)?(likes?|replies)$/i.test(line) ||
+    /^\d+\s*(s|m|h|d|w|mo|y)$/i.test(line) ||
+    /^\d+\s*(\uCD08|\uBD84|\uC2DC\uAC04|\uC77C|\uC8FC|\uAC1C\uC6D4|\uB144)(\s*\uC804)?$/.test(line) ||
+    /^(\uB2F5\uAE00(\s*\uB2EC\uAE30|\s*\uBCF4\uAE30)?|\uB2F5\uAE00\s*\d+\uAC1C\s*\uBCF4\uAE30|\uBC88\uC5ED\s*\uBCF4\uAE30|\uC88B\uC544\uC694|\uB354\s*\uBCF4\uAE30|\uC2E0\uACE0|\uD314\uB85C\uC6B0|\uD314\uB85C\uC789)$/.test(line) ||
+    /^\uC88B\uC544\uC694\s*\d+\uAC1C$/.test(line)
+  );
+}
+
+function hasInstagramReplyControl(element) {
+  return Array.from(element.querySelectorAll("button, [role='button']")).some((control) => {
+    const label = getElementText(control);
+    return /^(reply|\uB2F5\uAE00\s*\uB2EC\uAE30)$/i.test(label);
+  });
+}
+
+function collectInstagramComments() {
+  if (!isInstagramPage()) {
+    return [];
+  }
+
+  const comments = [];
+  const seen = new Set();
+  const roots = [];
+  const rootSet = new Set();
+
+  for (const root of document.querySelectorAll("article, [role='dialog']")) {
+    if (!rootSet.has(root) && isRenderedElement(root)) {
+      rootSet.add(root);
+      roots.push(root);
+    }
+  }
+
+  for (const root of roots) {
+    const header = root.querySelector("header") || root.querySelector("[role='banner']");
+    const postAuthor = header ? getInstagramProfileName(header) : "";
+    const candidateSet = new Set();
+
+    for (const item of root.querySelectorAll(
+      "ul > li, ul > div > li, [role='list'] > [role='listitem']"
+    )) {
+      candidateSet.add(item);
+    }
+
+    for (const item of candidateSet) {
+      if (!isRenderedElement(item) || item.closest("header")) {
+        continue;
+      }
+
+      const author = getInstagramProfileName(item);
+      if (!author) {
+        continue;
+      }
+
+      const rawLines = ownRenderedItemText(item)
+        .split("\n")
+        .map((line) => cleanText(line))
+        .filter(Boolean);
+      const lines = rawLines.filter((line) => line !== author && !isInstagramUiLine(line));
+
+      if (lines.length && lines[0].startsWith(`${author} `)) {
+        lines[0] = cleanText(lines[0].slice(author.length));
+      }
+
+      const body = cleanText(lines.filter(Boolean).join("\n"));
+      if (!body || body.length > 4000) {
+        continue;
+      }
+
+      if (postAuthor && author === postAuthor && !hasInstagramReplyControl(item)) {
+        continue;
+      }
+
+      pushUniqueComment(comments, seen, `${author}\n${body}`);
+    }
+  }
+
+  return comments;
+}
+
+function isDanawaUiLine(line) {
+  return (
+    /^(report|reply|delete|edit|more|collapse|recommend|not recommend)$/i.test(line) ||
+    /^(\uC2E0\uACE0|\uB2F5\uAE00|\uC0AD\uC81C|\uC218\uC815|\uB354\uBCF4\uAE30|\uC811\uAE30|\uCD94\uCC9C|\uBE44\uCD94\uCC9C|\uB4F1\uB85D)$/.test(line) ||
+    /^\d[\d,]*\s*\uC6D0$/.test(line) ||
+    /^(\uC0C1\uD488\uC758\uACAC|\uC0C1\uD488\uD3C9|\uB9AC\uBDF0|\uC0AC\uC6A9\uAE30)$/.test(line)
+  );
+}
+
+function collectDanawaComments() {
+  if (!isDanawaPage()) {
+    return [];
+  }
+
+  const selectors = [
+    "[id^='danawa-prodBlog-productOpinion-list-self-']",
+    "[id^='danawa-prodBlog-companyReview-content-wrap-']",
+    "#danawa-prodBlog-companyReview-content-list li",
+    "#danawa-prodBlog-productOpinion-content-list li",
+    "[class*='review_list' i] > li",
+    "[class*='review-list' i] > li",
+    "[class*='reviewList' i] > li",
+    "[class*='opinion_list' i] > li",
+    "[class*='opinion-list' i] > li",
+    "[class*='comment_list' i] > li",
+    "[class*='comment-list' i] > li",
+    "[class*='mall_review' i] li",
+    "[class*='prod_review' i] li",
+    "[class*='user_review' i] li",
+    "[class*='review_item' i]",
+    "[class*='review-item' i]",
+    "[class*='opinion_item' i]",
+    "[class*='opinion-item' i]",
+    "[class*='comment_item' i]",
+    "[class*='comment-item' i]"
+  ];
+  const candidateSet = new Set();
+  const comments = [];
+  const seen = new Set();
+
+  for (const selector of selectors) {
+    for (const element of document.querySelectorAll(selector)) {
+      candidateSet.add(element);
+    }
+  }
+
+  for (const item of candidateSet) {
+    if (!isRenderedElement(item)) {
+      continue;
+    }
+
+    const lines = ownRenderedItemText(item)
+      .split("\n")
+      .map((line) => cleanText(line))
+      .filter((line) => line && !isDanawaUiLine(line));
+    const comment = cleanText(lines.join("\n"));
+
+    if (comment.length < 2 || comment.length > 5000) {
+      continue;
+    }
+    if (/^(\uB4F1\uB85D\uB41C|\uC791\uC131\uB41C).*(\uC5C6\uC2B5\uB2C8\uB2E4|\uC5C6\uC74C)$/.test(comment)) {
+      continue;
+    }
+
+    pushUniqueComment(comments, seen, comment);
+  }
+
+  return comments;
+}
+
 function collectCommentsFromVisibleText(text) {
   const source = String(text || "");
   const startMatch = source.match(/전체\s*댓글\s*[\d,]+\s*개/);
@@ -330,6 +546,14 @@ function collectLikelyComments(pageText) {
   const dcinsideComments = collectDcinsideComments();
   if (isDcinsidePage()) {
     return dcinsideComments;
+  }
+
+  if (isInstagramPage()) {
+    return collectInstagramComments();
+  }
+
+  if (isDanawaPage()) {
+    return collectDanawaComments();
   }
 
   if (dcinsideComments.length) {

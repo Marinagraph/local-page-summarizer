@@ -43,11 +43,24 @@ function storageKeyFor(url) {
 }
 
 function safeFileName(title) {
-  return title
+  const normalized = String(title || "").normalize("NFKC");
+  let fileName = normalized
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, " ")
+    .replace(/[\uD800-\uDFFF]/g, " ")
     .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/[^0-9A-Za-z\u00C0-\u024F\u1100-\u11FF\u3130-\u318F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7A3 ._()\[\]-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 80) || "page-summary";
+    .replace(/^[. ]+|[. ]+$/g, "")
+    .slice(0, 80)
+    .replace(/[. ]+$/g, "");
+
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(fileName)) {
+    fileName = `page-${fileName}`;
+  }
+
+  return fileName || "page-summary";
 }
 
 function normalizeLmStudioConcurrency(value) {
