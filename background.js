@@ -5,6 +5,8 @@ const LM_STUDIO_LOAD_MODEL_ENDPOINT = "http://127.0.0.1:2000/api/v1/models/load"
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
+const AUTO_MEDIUM_CONTEXT_MAX_CHARS = 16000;
+const AUTO_LARGE_CONTEXT_MAX_CHARS = 24000;
 const SECTION_SUMMARY_MAX_TOKENS = 900;
 const SECTION_MERGE_MAX_TOKENS = 1100;
 const SUMMARY_MAX_TOKENS = 1500;
@@ -575,6 +577,26 @@ function normalizeMaxChars(value) {
   return Math.max(MIN_MAX_CHARS, Math.floor(numeric));
 }
 
+function isAutoModelSetting(value) {
+  return /^auto(?::|$)/i.test(String(value || "").trim());
+}
+
+function effectiveMaxChars(settings, modelSelection) {
+  const configured = normalizeMaxChars(settings && settings.maxChars);
+  if (!isAutoModelSetting(settings && settings.model) || configured !== DEFAULT_MAX_CHARS) {
+    return configured;
+  }
+
+  const contextLength = Number(modelSelection && modelSelection.contextLength) || 0;
+  if (contextLength >= 65536) {
+    return AUTO_LARGE_CONTEXT_MAX_CHARS;
+  }
+  if (contextLength >= 32768) {
+    return AUTO_MEDIUM_CONTEXT_MAX_CHARS;
+  }
+  return configured;
+}
+
 function chunkMaxChars(maxChars) {
   return Math.max(MIN_MAX_CHARS, Math.floor(normalizeMaxChars(maxChars) * 0.82));
 }
@@ -1046,25 +1068,29 @@ function buildKoreanRewriteMessages(context, summaryText) {
   ];
 }
 
-async function requestChatCompletion(model, messages, signal, maxTokens) {
+async function requestChatCompletion(model, messages, signal, maxTokens, requestOptions = {}) {
   const started = Date.now();
+  const payload = {
+    model,
+    messages,
+    temperature: 0.2,
+    max_tokens: maxTokens,
+    chat_template_kwargs: {
+      enable_thinking: false,
+      enableThinking: false
+    },
+    stream: false
+  };
+  if (requestOptions.disableThinking) {
+    payload.reasoning_effort = "none";
+  }
   const response = await fetch(LM_STUDIO_ENDPOINT, {
     method: "POST",
     signal,
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.2,
-      max_tokens: maxTokens,
-      chat_template_kwargs: {
-        enable_thinking: false,
-        enableThinking: false
-      },
-      stream: false
-    })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -1339,7 +1365,22 @@ function isOutputBudgetRetryable(result) {
   return result && (result.errorKind === "reasoning_only" || result.errorKind === "length_limited");
 }
 
-async function requestContentWithRetry(model, content, signal, maxChars, maxTokens, buildMessages, scheduleRequest) {
+function reasoningTokenCount(usage) {
+  return Number(
+    usage && usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens
+  ) || 0;
+}
+
+async function requestContentWithRetry(
+  model,
+  content,
+  signal,
+  maxChars,
+  maxTokens,
+  buildMessages,
+  scheduleRequest,
+  requestOptions = {}
+) {
   let lastResult = null;
   let promptChars = normalizeMaxChars(maxChars);
 
@@ -1354,7 +1395,8 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
           model,
           messages,
           signal,
-          attemptTokens
+          attemptTokens,
+          requestOptions
         )
       );
 
@@ -1385,7 +1427,18 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
   };
 }
 
-async function summarizeSection(model, context, section, maxChars, signal, report, sectionIndex, sectionCount, scheduleRequest) {
+async function summarizeSection(
+  model,
+  context,
+  section,
+  maxChars,
+  signal,
+  report,
+  sectionIndex,
+  sectionCount,
+  scheduleRequest,
+  requestOptions
+) {
   const timings = [];
   const chunkSummaries = await Promise.all(section.chunks.map(async (chunk, index) => {
     const result = await requestContentWithRetry(
@@ -1400,7 +1453,8 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
           await report(`LM Studio 분석 중... ${section.title} ${sectionIndex + 1}/${sectionCount}, 조각 ${index + 1}/${section.chunks.length}`);
         }
         return task();
-      })
+      }),
+      requestOptions
     );
     timings.push({
       type: "section",
@@ -1410,6 +1464,7 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
       elapsedMs: result.elapsedMs,
       promptTokens: result.usage && result.usage.prompt_tokens,
       completionTokens: result.usage && result.usage.completion_tokens,
+      reasoningTokens: reasoningTokenCount(result.usage),
       totalTokens: result.usage && result.usage.total_tokens
     });
     return result.summary;
@@ -1436,7 +1491,8 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
     maxChars,
     SECTION_MERGE_MAX_TOKENS,
     (content) => buildSectionMergeMessages(context, section, content),
-    scheduleRequest
+    scheduleRequest,
+    requestOptions
   );
   timings.push({
     type: "section-merge",
@@ -1444,6 +1500,7 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
     elapsedMs: merged.elapsedMs,
     promptTokens: merged.usage && merged.usage.prompt_tokens,
     completionTokens: merged.usage && merged.usage.completion_tokens,
+    reasoningTokens: reasoningTokenCount(merged.usage),
     totalTokens: merged.usage && merged.usage.total_tokens
   });
 
@@ -1453,7 +1510,16 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
 async function summarizeWithLMStudio(page, settings, signal, report) {
   const modelSelection = await selectLmStudioModel(settings.model, signal, report);
   const model = modelSelection.instanceId;
-  const maxChars = normalizeMaxChars(settings.maxChars);
+  const configuredMaxChars = normalizeMaxChars(settings.maxChars);
+  const maxChars = effectiveMaxChars(settings, modelSelection);
+  const requestOptions = {
+    disableThinking: isAutoModelSetting(settings.model) &&
+      Array.isArray(modelSelection.reasoningOptions) &&
+      modelSelection.reasoningOptions.some((option) => option === "off" || option === "none")
+  };
+  if (report && maxChars !== configuredMaxChars) {
+    await report(`LM Studio 자동 청크 크기: ${maxChars.toLocaleString()}자`);
+  }
   const context = pageContext(page);
   const sections = buildAnalysisSections(page, maxChars);
   const scheduleRequest = createTaskLimiter(resolveLmStudioConcurrency(settings), signal);
@@ -1473,7 +1539,8 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
       report,
       index,
       sections.length,
-      scheduleRequest
+      scheduleRequest,
+      requestOptions
     );
     lmTimings.push(...result.timings);
     return {
@@ -1494,7 +1561,8 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     maxChars,
     SUMMARY_MAX_TOKENS,
     (content) => buildFinalMessages(context, content),
-    scheduleRequest
+    scheduleRequest,
+    requestOptions
   );
   lmTimings.push({
     type: "final",
@@ -1502,6 +1570,7 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     elapsedMs: finalResult.elapsedMs,
     promptTokens: finalResult.usage && finalResult.usage.prompt_tokens,
     completionTokens: finalResult.usage && finalResult.usage.completion_tokens,
+    reasoningTokens: reasoningTokenCount(finalResult.usage),
     totalTokens: finalResult.usage && finalResult.usage.total_tokens
   });
 
@@ -1518,7 +1587,8 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
       maxChars,
       KOREAN_REWRITE_MAX_TOKENS,
       (content) => buildKoreanRewriteMessages(context, content),
-      scheduleRequest
+      scheduleRequest,
+      requestOptions
     );
     lmTimings.push({
       type: "final-rewrite",
@@ -1526,6 +1596,7 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
       elapsedMs: rewritten.elapsedMs,
       promptTokens: rewritten.usage && rewritten.usage.prompt_tokens,
       completionTokens: rewritten.usage && rewritten.usage.completion_tokens,
+      reasoningTokens: reasoningTokenCount(rewritten.usage),
       totalTokens: rewritten.usage && rewritten.usage.total_tokens
     });
     summary = rewritten.summary;
@@ -1536,7 +1607,11 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
     lmTimings,
     model: modelSelection.modelKey,
     modelInstanceId: modelSelection.instanceId,
-    modelSource: modelSelection.source
+    modelSource: modelSelection.source,
+    modelContextLength: modelSelection.contextLength,
+    configuredMaxChars,
+    effectiveMaxChars: maxChars,
+    thinkingDisabled: requestOptions.disableThinking
   };
 }
 
@@ -1611,7 +1686,11 @@ function loadedLmStudioModels(models) {
       loaded.push({
         modelKey: key || instanceId,
         instanceId,
-        model
+        model,
+        contextLength: Number(instance && instance.config && instance.config.context_length) || 0,
+        reasoningOptions: Array.isArray(model.capabilities?.reasoning?.allowed_options)
+          ? model.capabilities.reasoning.allowed_options.map((option) => String(option).toLowerCase())
+          : []
       });
     }
   }
@@ -1650,7 +1729,7 @@ async function loadLmStudioModel(modelKey, signal) {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: modelKey })
+    body: JSON.stringify({ model: modelKey, echo_load_config: true })
   });
   const responseText = await response.text();
   let data = {};
@@ -1669,7 +1748,8 @@ async function loadLmStudioModel(modelKey, signal) {
 
   return {
     instanceId: String(data.instance_id || data.model_instance_id || modelKey),
-    loadTimeSeconds: Number(data.load_time_seconds) || 0
+    loadTimeSeconds: Number(data.load_time_seconds) || 0,
+    contextLength: Number(data.load_config && data.load_config.context_length) || 0
   };
 }
 
@@ -1701,6 +1781,7 @@ async function selectLmStudioModel(configuredModel, signal, report) {
     }
 
     const defaultModel = resolveConfiguredModel(configuredModel || "auto:gemma", nativeModels);
+    const defaultModelInfo = nativeModels.find((model) => modelId(model) === defaultModel) || null;
     if (report) {
       await report(`LM Studio 기본 모델 로드 중: ${defaultModel}`);
     }
@@ -1711,7 +1792,11 @@ async function selectLmStudioModel(configuredModel, signal, report) {
     return {
       modelKey: defaultModel,
       instanceId: loadedDefault.instanceId,
-      source: "default-loaded"
+      source: "default-loaded",
+      contextLength: loadedDefault.contextLength,
+      reasoningOptions: Array.isArray(defaultModelInfo?.capabilities?.reasoning?.allowed_options)
+        ? defaultModelInfo.capabilities.reasoning.allowed_options.map((option) => String(option).toLowerCase())
+        : []
     };
   }
 
@@ -1722,7 +1807,9 @@ async function selectLmStudioModel(configuredModel, signal, report) {
   return {
     modelKey: legacyModel,
     instanceId: legacyModel,
-    source: "legacy-jit"
+    source: "legacy-jit",
+    contextLength: 0,
+    reasoningOptions: []
   };
 }
 
@@ -1925,10 +2012,10 @@ function toMarkdown(saved) {
     ? [
       "## LM Studio Timing",
       "",
-      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Total |",
-      "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Reasoning | Total |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
       ...saved.lmTimings.map((timing) => {
-        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${timing.totalTokens || ""} |`;
+        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${Number(timing.reasoningTokens) || 0} | ${timing.totalTokens || ""} |`;
       }),
       ""
     ]
@@ -1941,6 +2028,9 @@ function toMarkdown(saved) {
     `- Summarizer version: ${saved.summarizerVersion || extensionVersion()}`,
     saved.lmModel ? `- LM Studio model: ${saved.lmModel}` : "",
     saved.lmModelSource ? `- LM Studio model source: ${saved.lmModelSource}` : "",
+    saved.lmModelContextLength ? `- LM Studio model context: ${saved.lmModelContextLength}` : "",
+    saved.lmEffectiveMaxChars ? `- LM Studio chunk chars: ${saved.lmConfiguredMaxChars || saved.lmEffectiveMaxChars} configured, ${saved.lmEffectiveMaxChars} effective` : "",
+    typeof saved.lmThinkingDisabled === "boolean" ? `- LM Studio thinking disabled: ${saved.lmThinkingDisabled ? "yes" : "no"}` : "",
     `- Text extractor: ${saved.textSource || "selectors"}`,
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
@@ -2046,7 +2136,11 @@ async function runSummaryJob(request) {
       ...page,
       lmModel: lmResult.model,
       lmModelInstanceId: lmResult.modelInstanceId,
-      lmModelSource: lmResult.modelSource
+      lmModelSource: lmResult.modelSource,
+      lmModelContextLength: lmResult.modelContextLength,
+      lmConfiguredMaxChars: lmResult.configuredMaxChars,
+      lmEffectiveMaxChars: lmResult.effectiveMaxChars,
+      lmThinkingDisabled: lmResult.thinkingDisabled
     };
 
     await setJobState({ message: "결과 저장 중..." });

@@ -120,10 +120,10 @@ function toMarkdown(saved) {
     ? [
       "## LM Studio Timing",
       "",
-      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Total |",
-      "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+      "| Step | Section | Chunk | Elapsed | Prompt | Completion | Reasoning | Total |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
       ...saved.lmTimings.map((timing) => {
-        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${timing.totalTokens || ""} |`;
+        return `| ${timing.type || ""} | ${timing.section || ""} | ${timing.chunk ? `${timing.chunk}/${timing.chunks || "?"}` : ""} | ${timing.elapsedMs ? `${(timing.elapsedMs / 1000).toFixed(1)}s` : ""} | ${timing.promptTokens || ""} | ${timing.completionTokens || ""} | ${Number(timing.reasoningTokens) || 0} | ${timing.totalTokens || ""} |`;
       }),
       ""
     ]
@@ -136,6 +136,9 @@ function toMarkdown(saved) {
     `- Summarizer version: ${saved.summarizerVersion || "unknown"}`,
     saved.lmModel ? `- LM Studio model: ${saved.lmModel}` : "",
     saved.lmModelSource ? `- LM Studio model source: ${saved.lmModelSource}` : "",
+    saved.lmModelContextLength ? `- LM Studio model context: ${saved.lmModelContextLength}` : "",
+    saved.lmEffectiveMaxChars ? `- LM Studio chunk chars: ${saved.lmConfiguredMaxChars || saved.lmEffectiveMaxChars} configured, ${saved.lmEffectiveMaxChars} effective` : "",
+    typeof saved.lmThinkingDisabled === "boolean" ? `- LM Studio thinking disabled: ${saved.lmThinkingDisabled ? "yes" : "no"}` : "",
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
@@ -179,6 +182,10 @@ function renderMetaFromSaved(saved) {
     saved.lmModel
       ? `모델 ${saved.lmModel}${modelSource ? ` (${modelSource})` : ""}`
       : "",
+    saved.lmEffectiveMaxChars
+      ? `청크 ${(saved.lmConfiguredMaxChars || saved.lmEffectiveMaxChars).toLocaleString()} → ${saved.lmEffectiveMaxChars.toLocaleString()}자`
+      : "",
+    saved.lmThinkingDisabled ? "Thinking off" : "",
     saved.danawaCollection
       ? `다나와 상품의견 ${saved.danawaCollection.productOpinionCount.toLocaleString()}개 / 쇼핑몰 후기 ${saved.danawaCollection.companyReviewCount.toLocaleString()}개`
       : "",
