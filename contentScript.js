@@ -24,6 +24,10 @@ function isDanawaPage() {
   return /(^|\.)danawa\.com$/i.test(location.hostname);
 }
 
+function isKakakuReviewPage() {
+  return location.hostname === "review.kakaku.com" && /^\/review\/K\d+(?:\/|$)/i.test(location.pathname);
+}
+
 function getDanawaInlineScriptText() {
   return Array.from(document.scripts)
     .filter((script) => !script.src)
@@ -84,6 +88,30 @@ function collectDanawaMetadata() {
     cate3Code: categorySetting(3),
     makeDate
   };
+}
+
+function collectKakakuMetadata() {
+  if (!isKakakuReviewPage()) {
+    return null;
+  }
+
+  const productKey = (location.pathname.match(/^\/review\/(K\d+)(?:\/|$)/i) || [])[1] || "";
+  if (!productKey) {
+    return null;
+  }
+
+  return {
+    productKey,
+    baseUrl: `https://review.kakaku.com/review/${productKey}/`
+  };
+}
+
+function collectKakakuPageContext() {
+  return cleanText([
+    getElementText(document.querySelector("h1")),
+    getMetaDescription(),
+    getElementText(document.querySelector(".reviewernum"))
+  ].filter(Boolean).join("\n"));
 }
 
 function getElementText(element) {
@@ -550,6 +578,56 @@ function collectDanawaComments() {
   return comments;
 }
 
+function collectKakakuReviews() {
+  if (!isKakakuReviewPage()) {
+    return [];
+  }
+
+  const comments = [];
+  const seen = new Set();
+
+  for (const review of document.querySelectorAll(".reviewBox")) {
+    const entryDate = getElementText(review.querySelector(".entryDate"));
+    const reviewId = (entryDate.match(/\[([^\]]+)\]/) || [])[1] || "";
+    const date = cleanText(entryDate.replace(/\s*\[[^\]]+\]\s*$/, ""));
+    const author = getElementText(review.querySelector(".userName a, .userName"));
+    const title = getElementText(review.querySelector(".reviewTitle"));
+    const body = getElementText(review.querySelector(".revEntryCont"));
+    if (!title && !body) {
+      continue;
+    }
+
+    const ratings = Array.from(review.querySelectorAll(".revRateBox tr")).map((row) => {
+      const label = getElementText(row.querySelector("th"));
+      const value = getElementText(row.querySelector("td"));
+      return label && value ? `${label} ${value}` : "";
+    }).filter(Boolean);
+    const details = Array.from(review.querySelectorAll(".revDetailData dt")).map((term) => {
+      const value = getElementText(term.nextElementSibling);
+      const label = getElementText(term);
+      return label && value ? `${label} ${value}` : "";
+    }).filter(Boolean);
+    const helpful = getElementText(review.querySelector(".referCount"));
+    const metadata = [
+      author ? `작성자: ${author}` : "",
+      date ? `등록: ${date}` : "",
+      reviewId ? `리뷰 ID: ${reviewId}` : ""
+    ].filter(Boolean).join(" | ");
+    const text = cleanText([
+      `[가격닷컴 리뷰]${metadata ? ` ${metadata}` : ""}`,
+      ratings.length ? `평점: ${ratings.join(", ")}` : "",
+      title ? `제목: ${title}` : "",
+      body ? `본문:\n${body}` : "",
+      details.length ? `사용 정보: ${details.join(", ")}` : "",
+      helpful ? `도움됨: ${helpful}` : ""
+    ].filter(Boolean).join("\n"));
+
+    pushUniqueComment(comments, seen, text);
+  }
+
+  return comments;
+}
+
 function collectCommentsFromVisibleText(text) {
   const source = String(text || "");
   const startMatch = source.match(/전체\s*댓글\s*[\d,]+\s*개/);
@@ -619,6 +697,10 @@ function collectLikelyComments(pageText) {
 
   if (isDanawaPage()) {
     return collectDanawaComments();
+  }
+
+  if (isKakakuReviewPage()) {
+    return collectKakakuReviews();
   }
 
   if (dcinsideComments.length) {
@@ -1069,7 +1151,9 @@ function collectYouTubeTranscript() {
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const bestSource = getBestTextSource();
-  const text = cleanText(selection || bestSource.text || document.body.innerText || "");
+  const kakaku = collectKakakuMetadata();
+  const kakakuContext = kakaku ? collectKakakuPageContext() : "";
+  const text = cleanText(selection || kakakuContext || bestSource.text || document.body.innerText || "");
   const transcript = collectYouTubeTranscript();
 
   return {
@@ -1077,11 +1161,12 @@ function collectPage() {
     url: location.href,
     description: getMetaDescription(),
     text,
-    textSource: bestSource.extractor || "selectors",
+    textSource: kakaku && !selection ? "kakaku product context" : bestSource.extractor || "selectors",
     comments: collectLikelyComments(text),
     images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
     transcript,
     danawa: collectDanawaMetadata(),
+    kakaku,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };

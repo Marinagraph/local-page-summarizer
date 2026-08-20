@@ -128,6 +128,10 @@ function toMarkdown(saved) {
       `- Danawa product opinions: ${saved.danawaCollection.productOpinionCount} across ${saved.danawaCollection.productOpinionPages} pages`,
       `- Danawa company reviews: ${saved.danawaCollection.companyReviewCount} across ${saved.danawaCollection.companyReviewPages} pages`
     ] : []),
+    ...(saved.kakakuCollection ? [
+      `- Kakaku reviews: ${saved.kakakuCollection.reviewCount} across ${saved.kakakuCollection.pagesFetched} pages`,
+      `- Kakaku reported reviews: ${saved.kakakuCollection.totalReported || saved.kakakuCollection.reviewCount}`
+    ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
     ] : []),
@@ -158,6 +162,9 @@ function renderMetaFromSaved(saved) {
     `댓글 후보 ${(saved.comments || []).length.toLocaleString()}개`,
     saved.danawaCollection
       ? `다나와 상품의견 ${saved.danawaCollection.productOpinionCount.toLocaleString()}개 / 쇼핑몰 후기 ${saved.danawaCollection.companyReviewCount.toLocaleString()}개`
+      : "",
+    saved.kakakuCollection
+      ? `가격닷컴 리뷰 ${saved.kakakuCollection.reviewCount.toLocaleString()}개 / ${saved.kakakuCollection.pagesFetched}페이지`
       : "",
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,

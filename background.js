@@ -16,6 +16,8 @@ const MAX_LM_STUDIO_CONCURRENCY = 4;
 const DANAWA_PAGE_SIZE = 100;
 const DANAWA_MAX_PAGES = 100;
 const DANAWA_FETCH_RETRIES = 3;
+const KAKAKU_MAX_PAGES = 100;
+const KAKAKU_FETCH_RETRIES = 3;
 
 let activeJob = null;
 let activeAbortController = null;
@@ -199,15 +201,15 @@ function danawaRequestUrl(page, kind, pageNumber) {
   return endpoint.href;
 }
 
-function throwIfDanawaCollectionAborted(signal) {
+function throwIfCollectionAborted(signal) {
   if (signal && signal.aborted) {
     throw new Error("Summary job was cancelled.");
   }
 }
 
-function waitForDanawaRetry(delayMs, signal) {
+function waitForCollectionRetry(delayMs, signal) {
   return new Promise((resolve, reject) => {
-    throwIfDanawaCollectionAborted(signal);
+    throwIfCollectionAborted(signal);
     let settled = false;
     const timer = setTimeout(() => {
       settled = true;
@@ -231,7 +233,7 @@ async function fetchDanawaPage(url, signal) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= DANAWA_FETCH_RETRIES; attempt += 1) {
-    throwIfDanawaCollectionAborted(signal);
+    throwIfCollectionAborted(signal);
     try {
       const response = await fetch(url, {
         method: "GET",
@@ -261,7 +263,7 @@ async function fetchDanawaPage(url, signal) {
     }
 
     if (attempt < DANAWA_FETCH_RETRIES) {
-      await waitForDanawaRetry(300 * attempt, signal);
+      await waitForCollectionRetry(300 * attempt, signal);
     }
   }
 
@@ -345,6 +347,220 @@ async function enrichPageWithDanawaComments(page, signal, onProgress) {
       companyReviewPages: reviews.pagesFetched,
       totalCount: comments.length,
       pageSize: DANAWA_PAGE_SIZE
+    }
+  };
+}
+
+function normalizeKakakuText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function kakakuElementText(element) {
+  if (!element) {
+    return "";
+  }
+
+  const clone = element.cloneNode(true);
+  for (const br of clone.querySelectorAll("br")) {
+    br.replaceWith(br.ownerDocument.createTextNode("\n"));
+  }
+  return normalizeKakakuText(clone.textContent || "");
+}
+
+function isKakakuReviewCollection(page) {
+  if (!page || !page.kakaku || !/^K\d+$/i.test(String(page.kakaku.productKey || ""))) {
+    return false;
+  }
+
+  try {
+    const url = new URL(page.url);
+    return url.hostname === "review.kakaku.com" && /^\/review\/K\d+(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function parseKakakuReviewPage(html) {
+  const parsed = new DOMParser().parseFromString(String(html || ""), "text/html");
+  const rows = [];
+
+  for (const review of parsed.querySelectorAll(".reviewBox")) {
+    const entryDate = kakakuElementText(review.querySelector(".entryDate"));
+    const reviewId = (entryDate.match(/\[([^\]]+)\]/) || [])[1] || "";
+    const reviewCode = (
+      review.querySelector(".reviewTitle a[href*='ReviewCD=']")?.getAttribute("href") || ""
+    ).match(/ReviewCD=(\d+)/i)?.[1] || "";
+    const date = normalizeKakakuText(entryDate.replace(/\s*\[[^\]]+\]\s*$/, ""));
+    const author = kakakuElementText(review.querySelector(".userName a, .userName"));
+    const title = kakakuElementText(review.querySelector(".reviewTitle"));
+    const body = kakakuElementText(review.querySelector(".revEntryCont"));
+    if (!title && !body) {
+      continue;
+    }
+
+    const ratings = Array.from(review.querySelectorAll(".revRateBox tr")).map((row) => {
+      const label = kakakuElementText(row.querySelector("th"));
+      const value = kakakuElementText(row.querySelector("td"));
+      return label && value ? `${label} ${value}` : "";
+    }).filter(Boolean);
+    const details = Array.from(review.querySelectorAll(".revDetailData dt")).map((term) => {
+      const label = kakakuElementText(term);
+      const value = kakakuElementText(term.nextElementSibling);
+      return label && value ? `${label} ${value}` : "";
+    }).filter(Boolean);
+    const helpful = kakakuElementText(review.querySelector(".referCount"));
+    const metadata = [
+      author ? `작성자: ${author}` : "",
+      date ? `등록: ${date}` : "",
+      reviewId ? `리뷰 ID: ${reviewId}` : ""
+    ].filter(Boolean).join(" | ");
+    const text = normalizeKakakuText([
+      `[가격닷컴 리뷰]${metadata ? ` ${metadata}` : ""}`,
+      ratings.length ? `평점: ${ratings.join(", ")}` : "",
+      title ? `제목: ${title}` : "",
+      body ? `본문:\n${body}` : "",
+      details.length ? `사용 정보: ${details.join(", ")}` : "",
+      helpful ? `도움됨: ${helpful}` : ""
+    ].filter(Boolean).join("\n"));
+
+    rows.push({
+      key: `review:${reviewId || reviewCode || `${rows.length}:${title}:${date}`}`,
+      text
+    });
+  }
+
+  const reportedCounts = Array.from(parsed.querySelectorAll(".reviewernum .num"))
+    .map((element) => Number(normalizeKakakuText(element.textContent).replace(/[^\d]/g, "")))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const totalReported = reportedCounts.length ? Math.max(...reportedCounts) : 0;
+  const hasNextPage = Array.from(parsed.querySelectorAll("a[href*='Page=']")).some((link) => (
+    /次のページ/.test(normalizeKakakuText(link.textContent))
+  ));
+
+  return { rows, totalReported, hasNextPage };
+}
+
+function kakakuRequestUrl(page, pageNumber) {
+  const baseUrl = page.kakaku.baseUrl || `https://review.kakaku.com/review/${page.kakaku.productKey}/`;
+  const url = new URL(baseUrl);
+  if (pageNumber > 1) {
+    url.searchParams.set("Page", String(pageNumber));
+    url.hash = "tab";
+  }
+  return url.href;
+}
+
+async function fetchKakakuPage(url, signal) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= KAKAKU_FETCH_RETRIES; attempt += 1) {
+    throwIfCollectionAborted(signal);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { Accept: "text/html,application/xhtml+xml" },
+        signal
+      });
+
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        return new TextDecoder("shift_jis").decode(buffer);
+      }
+
+      lastError = new Error(`Kakaku request failed: ${response.status} ${response.statusText}`);
+      if (response.status < 500 && response.status !== 429) {
+        lastError.nonRetryable = true;
+        throw lastError;
+      }
+    } catch (error) {
+      if (signal && signal.aborted) {
+        throw error;
+      }
+      if (error && error.nonRetryable) {
+        throw error;
+      }
+      lastError = error;
+    }
+
+    if (attempt < KAKAKU_FETCH_RETRIES) {
+      await waitForCollectionRetry(300 * attempt, signal);
+    }
+  }
+
+  throw lastError || new Error("Kakaku request failed.");
+}
+
+async function collectKakakuReviews(page, signal, onProgress) {
+  const rows = [];
+  const seen = new Set();
+  let pagesFetched = 0;
+  let totalReported = 0;
+
+  for (let pageNumber = 1; pageNumber <= KAKAKU_MAX_PAGES; pageNumber += 1) {
+    const html = await fetchKakakuPage(kakakuRequestUrl(page, pageNumber), signal);
+    const parsed = parseKakakuReviewPage(html);
+    if (!parsed.rows.length) {
+      break;
+    }
+
+    let added = 0;
+    for (const row of parsed.rows) {
+      if (seen.has(row.key)) {
+        continue;
+      }
+      seen.add(row.key);
+      rows.push(row);
+      added += 1;
+    }
+
+    pagesFetched = pageNumber;
+    totalReported = Math.max(totalReported, parsed.totalReported);
+    if (onProgress) {
+      await onProgress(
+        `가격닷컴 전체 리뷰 수집 중: ${rows.length.toLocaleString()}` +
+        `${totalReported ? `/${totalReported.toLocaleString()}` : ""}개 (${pagesFetched}페이지)`
+      );
+    }
+    if (!parsed.hasNextPage) {
+      break;
+    }
+    if (!added) {
+      throw new Error("Kakaku pagination returned only duplicate reviews.");
+    }
+    if (pageNumber === KAKAKU_MAX_PAGES) {
+      throw new Error(`Kakaku review collection exceeded ${KAKAKU_MAX_PAGES} pages.`);
+    }
+  }
+
+  if (totalReported && rows.length < totalReported) {
+    throw new Error(`Kakaku review collection was incomplete: ${rows.length}/${totalReported}.`);
+  }
+
+  return { rows, pagesFetched, totalReported };
+}
+
+async function enrichPageWithKakakuReviews(page, signal, onProgress) {
+  if (!isKakakuReviewCollection(page)) {
+    return page;
+  }
+
+  const reviews = await collectKakakuReviews(page, signal, onProgress);
+  return {
+    ...page,
+    comments: reviews.rows.length ? reviews.rows.map((row) => row.text) : page.comments,
+    kakakuCollection: {
+      reviewCount: reviews.rows.length,
+      pagesFetched: reviews.pagesFetched,
+      totalReported: reviews.totalReported
     }
   };
 }
@@ -520,6 +736,9 @@ function pageContext(page) {
     `댓글 후보: ${(page.comments || []).length.toLocaleString()}개`,
     page.danawaCollection
       ? `다나와 전체 수집: 상품의견 ${page.danawaCollection.productOpinionCount.toLocaleString()}개, 쇼핑몰 후기 ${page.danawaCollection.companyReviewCount.toLocaleString()}개`
+      : "",
+    page.kakakuCollection
+      ? `가격닷컴 전체 수집: 리뷰 ${page.kakakuCollection.reviewCount.toLocaleString()}개, ${page.kakakuCollection.pagesFetched}페이지`
       : "",
     `이미지 후보: ${(page.images || []).length.toLocaleString()}개`,
     `OCR 결과: ${(page.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
@@ -1653,6 +1872,10 @@ function toMarkdown(saved) {
       `- Danawa product opinions: ${saved.danawaCollection.productOpinionCount} across ${saved.danawaCollection.productOpinionPages} pages`,
       `- Danawa company reviews: ${saved.danawaCollection.companyReviewCount} across ${saved.danawaCollection.companyReviewPages} pages`
     ] : []),
+    ...(saved.kakakuCollection ? [
+      `- Kakaku reviews: ${saved.kakakuCollection.reviewCount} across ${saved.kakakuCollection.pagesFetched} pages`,
+      `- Kakaku reported reviews: ${saved.kakakuCollection.totalReported || saved.kakakuCollection.reviewCount}`
+    ] : []),
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
     ...(saved.ocrTiming ? [
@@ -1706,6 +1929,14 @@ async function runSummaryJob(request) {
     if (isDanawaProductCollection(page)) {
       await setJobState({ message: "다나와 전체 상품의견과 쇼핑몰 후기 수집 중..." });
       page = await enrichPageWithDanawaComments(
+        page,
+        signal,
+        (message) => setJobState({ message })
+      );
+    }
+    if (isKakakuReviewCollection(page)) {
+      await setJobState({ message: "가격닷컴 전체 리뷰 수집 중..." });
+      page = await enrichPageWithKakakuReviews(
         page,
         signal,
         (message) => setJobState({ message })
