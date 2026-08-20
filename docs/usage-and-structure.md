@@ -132,7 +132,7 @@ http://127.0.0.1:2000/api/v1/models/load
 
 `Fallback model`
 : LM Studio에 로드된 chat model이 하나도 없을 때만 사용할 기본 모델입니다. 기본값은 `auto:gemma`이며, 다운로드된 embedding 이외의 Gemma 계열 중 가장 큰 모델을 골라 `/api/v1/models/load`로 로드합니다. 이미 chat model 하나가 로드되어 있으면 이 값과 관계없이 그 인스턴스를 그대로 사용합니다. 여러 chat model이 로드된 경우에는 이 값과 정확히 또는 부분적으로 일치하는 모델을 우선하고, 일치 항목이 없으면 LM Studio 목록의 첫 번째 로드 인스턴스를 사용합니다.
-: 값이 `auto`로 시작하고 선택된 모델이 reasoning `off`를 지원하면 `reasoning_effort: none`과 `enable_thinking: false`를 함께 보내 추론을 끕니다. 저장된 Markdown의 `LM Studio thinking disabled`와 타이밍 표의 `Reasoning` 열에서 적용 여부를 확인할 수 있습니다.
+: 선택된 모델이 reasoning `off`를 지원하면 직접 로드하거나 정확한 모델명을 입력한 경우에도 `reasoning_effort: none`과 `enable_thinking: false`를 함께 보내 추론을 끕니다. 기본 `Max chars`를 사용하면 `auto` 선택 모델과 Gemma 모델은 로드된 context에 맞춰 청크를 16,000자 또는 24,000자로 자동 확대합니다. 저장된 Markdown의 `LM Studio thinking disabled`, 청크 크기, 타이밍 표의 `Reasoning` 열에서 적용 여부를 확인할 수 있습니다.
 
 예:
 
@@ -229,7 +229,7 @@ The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.34.xpi
+dist\local-page-summarizer-0.3.35.xpi
 ```
 
 ## 개발 검증

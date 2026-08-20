@@ -757,9 +757,32 @@ function isAutoModelSetting(value) {
   return /^auto(?::|$)/i.test(String(value || "").trim());
 }
 
+function selectedModelIdentifier(modelSelection) {
+  return [
+    modelSelection && modelSelection.modelKey,
+    modelSelection && modelSelection.instanceId,
+    modelSelection && modelSelection.model && modelId(modelSelection.model)
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function isGemmaModelSelection(modelSelection) {
+  return /(^|[\s/_.-])gemma(?:[\s/_.-]|$)/i.test(selectedModelIdentifier(modelSelection));
+}
+
+function modelSupportsThinkingOff(modelSelection) {
+  const options = Array.isArray(modelSelection && modelSelection.reasoningOptions)
+    ? modelSelection.reasoningOptions
+    : [];
+  return options.some((option) => option === "off" || option === "none");
+}
+
+function usesFastChunkSizing(settings, modelSelection) {
+  return isAutoModelSetting(settings && settings.model) || isGemmaModelSelection(modelSelection);
+}
+
 function effectiveMaxChars(settings, modelSelection) {
   const configured = normalizeMaxChars(settings && settings.maxChars);
-  if (!isAutoModelSetting(settings && settings.model) || configured !== DEFAULT_MAX_CHARS) {
+  if (!usesFastChunkSizing(settings, modelSelection) || configured !== DEFAULT_MAX_CHARS) {
     return configured;
   }
 
@@ -1692,9 +1715,7 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
   const configuredMaxChars = normalizeMaxChars(settings.maxChars);
   const maxChars = effectiveMaxChars(settings, modelSelection);
   const requestOptions = {
-    disableThinking: isAutoModelSetting(settings.model) &&
-      Array.isArray(modelSelection.reasoningOptions) &&
-      modelSelection.reasoningOptions.some((option) => option === "off" || option === "none")
+    disableThinking: modelSupportsThinkingOff(modelSelection)
   };
   if (report && maxChars !== configuredMaxChars) {
     await report(`LM Studio 자동 청크 크기: ${maxChars.toLocaleString()}자`);
