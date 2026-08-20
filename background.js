@@ -1,5 +1,7 @@
 const LM_STUDIO_ENDPOINT = "http://127.0.0.1:2000/v1/chat/completions";
 const LM_STUDIO_MODELS_ENDPOINT = "http://127.0.0.1:2000/v1/models";
+const LM_STUDIO_NATIVE_MODELS_ENDPOINT = "http://127.0.0.1:2000/api/v1/models";
+const LM_STUDIO_LOAD_MODEL_ENDPOINT = "http://127.0.0.1:2000/api/v1/models/load";
 const DEFAULT_OCR_ENDPOINT = "http://127.0.0.1:2010/ocr";
 const DEFAULT_MAX_CHARS = 8000;
 const MIN_MAX_CHARS = 1000;
@@ -22,7 +24,6 @@ const KAKAKU_FETCH_RETRIES = 3;
 let activeJob = null;
 let activeAbortController = null;
 const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
-const fallbackModelCache = new Map();
 
 function storageKeyFor(url) {
   return `page:${url}`;
@@ -1357,23 +1358,6 @@ async function requestContentWithRetry(model, content, signal, maxChars, maxToke
         )
       );
 
-      if (!lastResult.ok && lastResult.errorKind === "reasoning_only") {
-        const fallbackModel = await findNonThinkingFallbackModel(model, signal);
-        if (fallbackModel && fallbackModel !== model) {
-          const fallbackResult = await scheduleRequest(
-            () => requestChatCompletion(
-              fallbackModel,
-              messages,
-              signal,
-              attemptTokens
-            )
-          );
-          if (fallbackResult.ok || fallbackResult.errorKind !== "reasoning_only") {
-            lastResult = fallbackResult;
-          }
-        }
-      }
-
       if (lastResult.ok || !isOutputBudgetRetryable(lastResult)) {
         break;
       }
@@ -1467,9 +1451,8 @@ async function summarizeSection(model, context, section, maxChars, signal, repor
 }
 
 async function summarizeWithLMStudio(page, settings, signal, report) {
-  const resolvedModel = await resolveModelName(settings.model, signal);
-  const fallbackModel = await findNonThinkingFallbackModel(resolvedModel, signal);
-  const model = fallbackModel || resolvedModel;
+  const modelSelection = await selectLmStudioModel(settings.model, signal, report);
+  const model = modelSelection.instanceId;
   const maxChars = normalizeMaxChars(settings.maxChars);
   const context = pageContext(page);
   const sections = buildAnalysisSections(page, maxChars);
@@ -1550,32 +1533,36 @@ async function summarizeWithLMStudio(page, settings, signal, report) {
 
   return {
     summary,
-    lmTimings
+    lmTimings,
+    model: modelSelection.modelKey,
+    modelInstanceId: modelSelection.instanceId,
+    modelSource: modelSelection.source
   };
 }
 
-async function resolveModelName(configuredModel, signal) {
-  const requested = (configuredModel || "").trim();
-  const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
-  if (!response.ok) {
-    throw new Error(`LM Studio 모델 목록 요청 실패: ${response.status}`);
-  }
+function modelId(item) {
+  return String(item && (item.key || item.id) || "").trim();
+}
 
-  const data = await response.json();
-  const models = (Array.isArray(data.data) ? data.data : []).filter((item) => {
-    const id = String(item.id || "");
-    return id && !id.toLowerCase().includes("embedding") && !id.toLowerCase().includes("embed");
-  });
+function isChatModel(item) {
+  const id = modelId(item).toLowerCase();
+  const type = String(item && item.type || "").toLowerCase();
+  return Boolean(id) && type !== "embedding" && type !== "embeddings" && !/embedding|embed/.test(id);
+}
+
+function resolveConfiguredModel(configuredModel, models) {
+  const requested = (configuredModel || "").trim();
+  const chatModels = (Array.isArray(models) ? models : []).filter(isChatModel);
 
   if (requested && !requested.toLowerCase().startsWith("auto")) {
-    const exact = models.find((item) => item.id === requested);
+    const exact = chatModels.find((item) => modelId(item) === requested);
     if (exact) {
-      return exact.id;
+      return modelId(exact);
     }
 
-    const partialMatches = models.filter((item) => item.id.toLowerCase().includes(requested.toLowerCase()));
+    const partialMatches = chatModels.filter((item) => modelId(item).toLowerCase().includes(requested.toLowerCase()));
     if (partialMatches.length) {
-      return pickBestModel(partialMatches).id;
+      return modelId(pickBestModel(partialMatches));
     }
 
     return requested;
@@ -1585,75 +1572,164 @@ async function resolveModelName(configuredModel, signal) {
     ? requested.slice(requested.indexOf(":") + 1).trim().toLowerCase()
     : "";
   const candidates = query
-    ? models.filter((item) => item.id.toLowerCase().includes(query))
-    : models;
+    ? chatModels.filter((item) => modelId(item).toLowerCase().includes(query))
+    : chatModels;
   const model = pickBestModel(candidates);
 
-  if (!model || !model.id) {
-    throw new Error("LM Studio에서 사용할 chat 모델을 찾지 못했습니다.");
+  if (!model || !modelId(model)) {
+    const qualifier = query ? ` '${query}'` : "";
+    throw new Error(`LM Studio에서 사용할${qualifier} chat 모델을 찾지 못했습니다.`);
   }
 
-  return model.id;
+  return modelId(model);
 }
 
-async function findNonThinkingFallbackModel(primaryModel, signal) {
-  const modelId = String(primaryModel || "");
-  const cacheKey = modelId.toLowerCase();
-  if (fallbackModelCache.has(cacheKey)) {
-    return fallbackModelCache.get(cacheKey);
+async function fetchNativeLmStudioModels(signal) {
+  const response = await fetch(LM_STUDIO_NATIVE_MODELS_ENDPOINT, { signal });
+  if (response.status === 404 || response.status === 405) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`LM Studio 네이티브 모델 목록 요청 실패: ${response.status}`);
   }
 
-  if (!/qat|thinking|reason/i.test(modelId)) {
-    fallbackModelCache.set(cacheKey, "");
-    return "";
+  const data = await response.json();
+  return Array.isArray(data.models) ? data.models : [];
+}
+
+function loadedLmStudioModels(models) {
+  const loaded = [];
+
+  for (const model of (Array.isArray(models) ? models : []).filter(isChatModel)) {
+    const key = modelId(model);
+    const instances = Array.isArray(model.loaded_instances) ? model.loaded_instances : [];
+    for (const instance of instances) {
+      const instanceId = String(instance && (instance.id || instance.instance_id) || key).trim();
+      if (!instanceId) {
+        continue;
+      }
+      loaded.push({
+        modelKey: key || instanceId,
+        instanceId,
+        model
+      });
+    }
   }
 
-  let fallback = "";
-  try {
-    const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
-    if (!response.ok) {
-      fallbackModelCache.set(cacheKey, "");
-      return "";
+  return loaded;
+}
+
+function chooseLoadedLmStudioModel(loadedModels, configuredModel) {
+  const loaded = Array.isArray(loadedModels) ? loadedModels : [];
+  if (loaded.length <= 1) {
+    return loaded[0] || null;
+  }
+
+  const requested = String(configuredModel || "").trim().toLowerCase();
+  if (requested && !requested.startsWith("auto")) {
+    const exact = loaded.find((item) => (
+      item.modelKey.toLowerCase() === requested || item.instanceId.toLowerCase() === requested
+    ));
+    if (exact) {
+      return exact;
     }
 
-    const data = await response.json();
-    const models = (Array.isArray(data.data) ? data.data : [])
-      .map((item) => String(item.id || ""))
-      .filter((id) => id && !/embedding|embed/i.test(id));
-    const primarySize = extractModelSizeB(modelId);
-    const lowerPrimary = modelId.toLowerCase();
-    const preferred = models.filter((id) => {
-      const lower = id.toLowerCase();
-      if (lower === lowerPrimary || /qat|thinking|reason/i.test(lower)) {
-        return false;
-      }
-
-      if (lowerPrimary.includes("gemma") && !lower.includes("gemma")) {
-        return false;
-      }
-
-      if (primarySize && extractModelSizeB(id) && extractModelSizeB(id) !== primarySize) {
-        return false;
-      }
-
-      return /(?:^|[-_/])it(?:$|[-_/])|instruct|uncensored/i.test(lower);
-    });
-
-    fallback = preferred.length
-      ? pickBestModel(preferred.map((id) => ({ id }))).id
-      : "";
-  } catch (error) {
-    fallback = "";
+    const partial = loaded.find((item) => (
+      item.modelKey.toLowerCase().includes(requested) || item.instanceId.toLowerCase().includes(requested)
+    ));
+    if (partial) {
+      return partial;
+    }
   }
 
-  fallbackModelCache.set(cacheKey, fallback);
-  return fallback;
+  return loaded[0];
+}
+
+async function loadLmStudioModel(modelKey, signal) {
+  const response = await fetch(LM_STUDIO_LOAD_MODEL_ENDPOINT, {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelKey })
+  });
+  const responseText = await response.text();
+  let data = {};
+  if (responseText) {
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = {};
+    }
+  }
+
+  if (!response.ok) {
+    const detail = data && (data.error || data.message) ? data.error || data.message : responseText;
+    throw new Error(`LM Studio 기본 모델 로드 실패: ${response.status}${detail ? ` ${detail}` : ""}`);
+  }
+
+  return {
+    instanceId: String(data.instance_id || data.model_instance_id || modelKey),
+    loadTimeSeconds: Number(data.load_time_seconds) || 0
+  };
+}
+
+async function resolveLegacyModelName(configuredModel, signal) {
+  const requested = (configuredModel || "").trim();
+  const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
+  if (!response.ok) {
+    throw new Error(`LM Studio 모델 목록 요청 실패: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return resolveConfiguredModel(requested, Array.isArray(data.data) ? data.data : []);
+}
+
+async function selectLmStudioModel(configuredModel, signal, report) {
+  const nativeModels = await fetchNativeLmStudioModels(signal);
+
+  if (nativeModels) {
+    const loaded = loadedLmStudioModels(nativeModels);
+    const selectedLoaded = chooseLoadedLmStudioModel(loaded, configuredModel);
+    if (selectedLoaded) {
+      if (report) {
+        await report(`LM Studio 로드된 모델 사용: ${selectedLoaded.modelKey}`);
+      }
+      return {
+        ...selectedLoaded,
+        source: "loaded"
+      };
+    }
+
+    const defaultModel = resolveConfiguredModel(configuredModel || "auto:gemma", nativeModels);
+    if (report) {
+      await report(`LM Studio 기본 모델 로드 중: ${defaultModel}`);
+    }
+    const loadedDefault = await loadLmStudioModel(defaultModel, signal);
+    if (report) {
+      await report(`LM Studio 기본 모델 로드 완료: ${defaultModel}`);
+    }
+    return {
+      modelKey: defaultModel,
+      instanceId: loadedDefault.instanceId,
+      source: "default-loaded"
+    };
+  }
+
+  const legacyModel = await resolveLegacyModelName(configuredModel || "auto:gemma", signal);
+  if (report) {
+    await report(`LM Studio 모델 사용: ${legacyModel}`);
+  }
+  return {
+    modelKey: legacyModel,
+    instanceId: legacyModel,
+    source: "legacy-jit"
+  };
 }
 
 function pickBestModel(models) {
   return [...models].sort((a, b) => {
-    const bSize = extractModelSizeB(b.id);
-    const aSize = extractModelSizeB(a.id);
+    const bSize = Number(b && b.size_bytes) || extractModelSizeB(modelId(b));
+    const aSize = Number(a && a.size_bytes) || extractModelSizeB(modelId(a));
     if (bSize !== aSize) {
       return bSize - aSize;
     }
@@ -1863,6 +1939,8 @@ function toMarkdown(saved) {
     "",
     `- URL: ${saved.url}`,
     `- Summarizer version: ${saved.summarizerVersion || extensionVersion()}`,
+    saved.lmModel ? `- LM Studio model: ${saved.lmModel}` : "",
+    saved.lmModelSource ? `- LM Studio model source: ${saved.lmModelSource}` : "",
     `- Text extractor: ${saved.textSource || "selectors"}`,
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
@@ -1964,6 +2042,12 @@ async function runSummaryJob(request) {
     await setJobState({ message: "LM Studio 분석 준비 중..." });
     const lmResult = await summarizeWithLMStudio(page, request.settings, signal, (message) => setJobState({ message }));
     const summary = lmResult.summary;
+    page = {
+      ...page,
+      lmModel: lmResult.model,
+      lmModelInstanceId: lmResult.modelInstanceId,
+      lmModelSource: lmResult.modelSource
+    };
 
     await setJobState({ message: "결과 저장 중..." });
     const saved = await saveResult(page, summary, lmResult.lmTimings);

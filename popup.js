@@ -72,6 +72,19 @@ function normalizeLmStudioConcurrency(value) {
   return Math.max(1, Math.min(MAX_LM_STUDIO_CONCURRENCY, Math.floor(numeric)));
 }
 
+function lmModelSourceLabel(source) {
+  if (source === "loaded") {
+    return "이미 로드됨";
+  }
+  if (source === "default-loaded") {
+    return "기본 모델 자동 로드";
+  }
+  if (source === "legacy-jit") {
+    return "LM Studio JIT 로드";
+  }
+  return "";
+}
+
 function toMarkdown(saved) {
   const transcriptSection = saved.transcript && saved.transcript.text
     ? [
@@ -121,6 +134,8 @@ function toMarkdown(saved) {
     "",
     `- URL: ${saved.url}`,
     `- Summarizer version: ${saved.summarizerVersion || "unknown"}`,
+    saved.lmModel ? `- LM Studio model: ${saved.lmModel}` : "",
+    saved.lmModelSource ? `- LM Studio model source: ${saved.lmModelSource}` : "",
     `- Collected: ${saved.collectedAt}`,
     `- Saved: ${saved.savedAt}`,
     `- Selected only: ${saved.selectedOnly ? "yes" : "no"}`,
@@ -152,6 +167,7 @@ function toMarkdown(saved) {
 }
 
 function renderMetaFromSaved(saved) {
+  const modelSource = lmModelSourceLabel(saved.lmModelSource);
   pageMetaElement.hidden = false;
   pageMetaElement.textContent = [
     saved.title,
@@ -160,6 +176,9 @@ function renderMetaFromSaved(saved) {
     `Text extractor ${saved.textSource || "selectors"}`,
     `본문 ${(saved.text || "").length.toLocaleString()}자`,
     `댓글 후보 ${(saved.comments || []).length.toLocaleString()}개`,
+    saved.lmModel
+      ? `모델 ${saved.lmModel}${modelSource ? ` (${modelSource})` : ""}`
+      : "",
     saved.danawaCollection
       ? `다나와 상품의견 ${saved.danawaCollection.productOpinionCount.toLocaleString()}개 / 쇼핑몰 후기 ${saved.danawaCollection.companyReviewCount.toLocaleString()}개`
       : "",

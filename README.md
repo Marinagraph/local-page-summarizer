@@ -9,7 +9,7 @@ OCR engine benchmark notes are in [`docs/ocr-benchmark.md`](docs/ocr-benchmark.m
 
 - Firefox
 - LM Studio local server running at `http://127.0.0.1:2000`
-- A loaded model in LM Studio
+- At least one downloaded chat model in LM Studio; loading it manually is optional
 - Python 3.11 and a CUDA-capable GPU for the optional OCR server
 
 ## Load in Firefox
@@ -28,8 +28,9 @@ Start the local server in LM Studio and keep the endpoint at:
 http://127.0.0.1:2000/v1/chat/completions
 ```
 
-If LM Studio requires an exact model name, enter that model name in the popup's `Model` field.
-Set `Model` to `auto:gemma` to select the largest non-embedding Gemma model returned by LM Studio's `/v1/models` endpoint, such as `google/gemma-4-31b-qat`. You can also enter an exact model id or a partial model id manually when needed.
+The extension first checks LM Studio's native `/api/v1/models` endpoint. If one chat model is already loaded, that exact loaded instance is used regardless of the `Fallback model` value. If no chat model is loaded, the extension resolves the `Fallback model`, loads it through `/api/v1/models/load`, and then starts analysis. When several chat models are loaded, an exact or partial `Fallback model` match wins; otherwise the first loaded instance returned by LM Studio is used.
+
+`Fallback model` defaults to `auto:gemma`, which selects the largest downloaded non-embedding Gemma model only when nothing is already loaded. You can enter an exact model key or a partial model key instead. The model actually used and whether it was already loaded or loaded as the fallback are included in the popup metadata and Markdown export.
 
 The popup defaults `Max chars` to `8000` so models loaded with a 10k context can handle long pages, comments, OCR text, and transcript text more reliably. `Max chars` is used as the per-call chunk budget, not as a hard cap on the entire collected page. If you load a model with a larger context, such as 100k, you can raise `Max chars` in the popup to reduce the number of chunks. If LM Studio still reports a context-length error, the extension retries with a smaller prompt automatically.
 Set `Parallel` to control how many independent LM Studio analysis calls can run at the same time. The default is `2`, which is usually faster than fully sequential analysis while avoiding heavy contention. If LM Studio has enough GPU memory and multiple slots, try `3` or `4`; if the machine becomes sluggish, lower it to `1`.
