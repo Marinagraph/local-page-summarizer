@@ -28,6 +28,10 @@ function isKakakuReviewPage() {
   return location.hostname === "review.kakaku.com" && /^\/review\/K\d+(?:\/|$)/i.test(location.pathname);
 }
 
+function isKakakuBbsPage() {
+  return location.hostname === "bbs.kakaku.com" && /^\/bbs\/K\d+(?:\/|$)/i.test(location.pathname);
+}
+
 function getDanawaInlineScriptText() {
   return Array.from(document.scripts)
     .filter((script) => !script.src)
@@ -106,11 +110,35 @@ function collectKakakuMetadata() {
   };
 }
 
+function collectKakakuBbsMetadata() {
+  if (!isKakakuBbsPage()) {
+    return null;
+  }
+
+  const productKey = (location.pathname.match(/^\/bbs\/(K\d+)(?:\/|$)/i) || [])[1] || "";
+  if (!productKey) {
+    return null;
+  }
+
+  return {
+    productKey,
+    baseUrl: `https://bbs.kakaku.com/bbs/${productKey}/`
+  };
+}
+
 function collectKakakuPageContext() {
   return cleanText([
     getElementText(document.querySelector("h1")),
     getMetaDescription(),
     getElementText(document.querySelector(".reviewernum"))
+  ].filter(Boolean).join("\n"));
+}
+
+function collectKakakuBbsPageContext() {
+  return cleanText([
+    getElementText(document.querySelector("h1")),
+    getMetaDescription(),
+    getElementText(document.querySelector("#tab, .tab, .bbsList"))
   ].filter(Boolean).join("\n"));
 }
 
@@ -628,6 +656,68 @@ function collectKakakuReviews() {
   return comments;
 }
 
+function collectKakakuBbsPosts() {
+  if (!isKakakuBbsPage()) {
+    return [];
+  }
+
+  const comments = [];
+  const seen = new Set();
+
+  for (const thread of document.querySelectorAll(".bbsArea")) {
+    const title = getElementText(thread.querySelector(".colorMiddle strong a[href*='SortID=']"));
+    const threadDate = getElementText(thread.querySelector(".colorMiddle .writeDateTime"));
+    const infoItems = Array.from(thread.querySelectorAll(".bbsInfoArea .good > p"));
+    const threadNice = getElementText(infoItems.find((item) => /ナイスクチコミ/.test(item.textContent || "")));
+    const replyCount = getElementText(infoItems.find((item) => /返信/.test(item.textContent || "")));
+
+    for (const [index, post] of Array.from(thread.querySelectorAll(".box06")).entries()) {
+      const bodyContainer = post.querySelector(".boxIn.clearfix.minH, .boxIn.minH");
+      if (!bodyContainer) {
+        continue;
+      }
+
+      const bodyClone = bodyContainer.cloneNode(true);
+      for (const metadata of bodyClone.querySelectorAll(".date, .vote, script, style")) {
+        metadata.remove();
+      }
+      const body = getElementText(bodyClone);
+      if (!body) {
+        continue;
+      }
+
+      const postId = post.querySelector(":scope > div[id]")?.id ||
+        (getElementText(post.querySelector(".date")).match(/書込番号：(\d+)/) || [])[1] || "";
+      const author = getElementText(post.querySelector(".title a.impact05, .title .floatL a[href*='/auth/profile/']"));
+      const date = getElementText(post.querySelector(".title .writeDateTime")) || threadDate;
+      const nice = getElementText(post.querySelector(".vote .fontRed, .vote strong"));
+      const isOriginal = index === 0;
+      const metadata = [
+        author ? `작성자: ${author}` : "",
+        date ? `등록: ${date}` : "",
+        postId ? `글 번호: ${postId}` : "",
+        nice ? `공감: ${nice}점` : "",
+        isOriginal && threadNice ? `스레드 ${threadNice}` : "",
+        isOriginal && replyCount ? replyCount : ""
+      ].filter(Boolean).join(" | ");
+      const text = cleanText([
+        `[가격닷컴 BBS ${isOriginal ? "원글" : "답글"}]${title ? ` 스레드: ${title}` : ""}`,
+        metadata,
+        `본문:\n${body}`
+      ].filter(Boolean).join("\n"));
+
+      const key = postId || text;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      comments.push(text);
+    }
+  }
+
+  return comments;
+}
+
 function collectCommentsFromVisibleText(text) {
   const source = String(text || "");
   const startMatch = source.match(/전체\s*댓글\s*[\d,]+\s*개/);
@@ -701,6 +791,10 @@ function collectLikelyComments(pageText) {
 
   if (isKakakuReviewPage()) {
     return collectKakakuReviews();
+  }
+
+  if (isKakakuBbsPage()) {
+    return collectKakakuBbsPosts();
   }
 
   if (dcinsideComments.length) {
@@ -1152,7 +1246,12 @@ function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const bestSource = getBestTextSource();
   const kakaku = collectKakakuMetadata();
-  const kakakuContext = kakaku ? collectKakakuPageContext() : "";
+  const kakakuBbs = collectKakakuBbsMetadata();
+  const kakakuContext = kakaku
+    ? collectKakakuPageContext()
+    : kakakuBbs
+      ? collectKakakuBbsPageContext()
+      : "";
   const text = cleanText(selection || kakakuContext || bestSource.text || document.body.innerText || "");
   const transcript = collectYouTubeTranscript();
 
@@ -1161,12 +1260,13 @@ function collectPage() {
     url: location.href,
     description: getMetaDescription(),
     text,
-    textSource: kakaku && !selection ? "kakaku product context" : bestSource.extractor || "selectors",
+    textSource: (kakaku || kakakuBbs) && !selection ? "kakaku product context" : bestSource.extractor || "selectors",
     comments: collectLikelyComments(text),
     images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
     transcript,
     danawa: collectDanawaMetadata(),
     kakaku,
+    kakakuBbs,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };

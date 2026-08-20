@@ -150,6 +150,10 @@ function toMarkdown(saved) {
       `- Kakaku reviews: ${saved.kakakuCollection.reviewCount} across ${saved.kakakuCollection.pagesFetched} pages`,
       `- Kakaku reported reviews: ${saved.kakakuCollection.totalReported || saved.kakakuCollection.reviewCount}`
     ] : []),
+    ...(saved.kakakuBbsCollection ? [
+      `- Kakaku BBS threads: ${saved.kakakuBbsCollection.threadCount} across ${saved.kakakuBbsCollection.pagesFetched} pages`,
+      `- Kakaku BBS posts: ${saved.kakakuBbsCollection.postCount}`
+    ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
     ] : []),
@@ -191,6 +195,9 @@ function renderMetaFromSaved(saved) {
       : "",
     saved.kakakuCollection
       ? `가격닷컴 리뷰 ${saved.kakakuCollection.reviewCount.toLocaleString()}개 / ${saved.kakakuCollection.pagesFetched}페이지`
+      : "",
+    saved.kakakuBbsCollection
+      ? `가격닷컴 BBS 스레드 ${saved.kakakuBbsCollection.threadCount.toLocaleString()}개 / 원글·답글 ${saved.kakakuBbsCollection.postCount.toLocaleString()}개 / ${saved.kakakuBbsCollection.pagesFetched}페이지`
       : "",
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
