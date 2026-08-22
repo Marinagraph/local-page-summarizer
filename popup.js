@@ -63,6 +63,33 @@ function safeFileName(title) {
   return fileName || "page-summary";
 }
 
+function sourceTextForMarkdown(saved) {
+  const pageText = String(saved && saved.text || "").trim();
+  const comments = Array.isArray(saved && saved.comments)
+    ? saved.comments.map((comment) => String(comment || "").trim()).filter(Boolean)
+    : [];
+  const sections = [];
+
+  if (pageText) {
+    sections.push(`[페이지 본문]\n${pageText}`);
+  }
+  if (comments.length) {
+    const entries = comments.map((comment, index) => (
+      `[댓글/리뷰 항목 ${index + 1}/${comments.length}]\n${comment}`
+    ));
+    sections.push(`[수집된 댓글/리뷰: ${comments.length}개]\n${entries.join("\n\n")}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+function markdownTextBlock(value) {
+  const text = String(value || "");
+  const longestFence = Math.max(0, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+  const fence = "`".repeat(Math.max(3, longestFence + 1));
+  return [`${fence}text`, text, fence];
+}
+
 function normalizeLmStudioConcurrency(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -167,9 +194,7 @@ function toMarkdown(saved) {
     ...lmTimingSection,
     "## Source Text",
     "",
-    "```text",
-    saved.text,
-    "```"
+    ...markdownTextBlock(sourceTextForMarkdown(saved))
   ].join("\n");
 }
 

@@ -216,6 +216,8 @@ C:\Users\objectives\Downloads\Local Page Summarizer\페이지 제목.md
 
 Popup의 `Export Markdown`은 가장 최근 저장 결과를 다시 Markdown으로 내보냅니다.
 
+Markdown의 `Source Text`에는 페이지 본문 다음에 수집된 댓글과 리뷰가 번호가 붙은 개별 항목으로 모두 저장됩니다. Kakaku와 Danawa처럼 background에서 페이지네이션으로 추가 수집한 원소도 동일하게 포함되므로, 후속 Markdown/JSON 변환 작업에서 요약문뿐 아니라 실제 분석 원문을 다시 사용할 수 있습니다.
+
 ## XPI 빌드
 
 현재 수동 빌드 명령:
@@ -229,7 +231,7 @@ The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.35.xpi
+dist\local-page-summarizer-0.3.36.xpi
 ```
 
 ## 개발 검증
