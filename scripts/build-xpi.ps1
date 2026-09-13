@@ -13,7 +13,6 @@ $entries = @(
   @{ Source = "popup.js"; Entry = "popup.js" },
   @{ Source = "contentScript.js"; Entry = "contentScript.js" },
   @{ Source = "background.js"; Entry = "background.js" },
-  @{ Source = "README.md"; Entry = "README.md" },
   @{ Source = "vendor\defuddle.js"; Entry = "vendor/defuddle.js" },
   @{ Source = "vendor\defuddle-LICENSE.txt"; Entry = "vendor/defuddle-LICENSE.txt" }
 )
@@ -39,7 +38,7 @@ spec = json.loads(os.environ["LOCAL_PAGE_SUMMARIZER_XPI_SPEC"])
 root = pathlib.Path(spec["Root"])
 xpi = pathlib.Path(spec["Xpi"])
 
-with zipfile.ZipFile(xpi, "w", compression=zipfile.ZIP_STORED) as archive:
+with zipfile.ZipFile(xpi, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
     for item in spec["Entries"]:
         source = root / item["Source"]
         if not source.is_file():

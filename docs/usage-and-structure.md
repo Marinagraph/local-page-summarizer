@@ -226,12 +226,12 @@ Markdown의 `Source Text`에는 페이지 본문 다음에 수집된 댓글과 �
 .\scripts\build-xpi.ps1
 ```
 
-The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does not reject the XPI with `Invalid file name in archive`.
+The build script writes ZIP entries with `/` paths and maximum DEFLATE compression so AMO accepts the archive while the XPI stays small. Only runtime files and the required Defuddle license are included.
 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.37.xpi
+dist\local-page-summarizer-0.3.38.xpi
 ```
 
 ## 개발 검증

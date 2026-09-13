@@ -1063,9 +1063,8 @@ function collectCommentsFromVisibleText(text) {
 }
 
 function collectLikelyComments(pageText) {
-  const dcinsideComments = collectDcinsideComments();
   if (isDcinsidePage()) {
-    return dcinsideComments;
+    return collectDcinsideComments();
   }
 
   if (isInstagramPage()) {
@@ -1086,10 +1085,6 @@ function collectLikelyComments(pageText) {
 
   if (isKakakuBbsPage()) {
     return collectKakakuBbsPosts();
-  }
-
-  if (dcinsideComments.length) {
-    return dcinsideComments;
   }
 
   const selectors = [
@@ -1145,6 +1140,7 @@ const CONTENT_CONTAINER_SELECTORS = [
   "main",
   "[role='main']"
 ];
+const CONTENT_CONTAINER_SELECTOR = CONTENT_CONTAINER_SELECTORS.join(",");
 
 const DCINSIDE_CONTENT_SELECTORS = [
   ".write_div",
@@ -1177,9 +1173,10 @@ const NON_CONTENT_CONTAINER_SELECTOR = [
   "[id*='reply' i]"
 ].join(",");
 
-function collectImageCandidates(contentRoot) {
+function collectImageCandidates(contentRoot, options = {}) {
   const seen = new Set();
   const candidates = [];
+  const requestedRoots = (Array.isArray(contentRoot) ? contentRoot : [contentRoot]).filter(Boolean);
 
   function isUsableImageRoot(element) {
     return Boolean(
@@ -1191,22 +1188,24 @@ function collectImageCandidates(contentRoot) {
   }
 
   function collectImageRoots() {
-    if (isUsableImageRoot(contentRoot)) {
-      return [contentRoot];
+    const explicitRoots = requestedRoots.filter(isUsableImageRoot);
+    if (explicitRoots.length) {
+      return explicitRoots;
+    }
+    if (options.strictRoots) {
+      return [];
     }
 
     const roots = [];
-    for (const selector of CONTENT_CONTAINER_SELECTORS) {
-      for (const element of document.querySelectorAll(selector)) {
-        if (!isUsableImageRoot(element)) {
-          continue;
-        }
-        if (roots.some((root) => root === element || root.contains(element) || element.contains(root))) {
-          continue;
-        }
-
-        roots.push(element);
+    for (const element of document.querySelectorAll(CONTENT_CONTAINER_SELECTOR)) {
+      if (!isUsableImageRoot(element)) {
+        continue;
       }
+      if (roots.some((root) => root === element || root.contains(element) || element.contains(root))) {
+        continue;
+      }
+
+      roots.push(element);
     }
 
     return roots;
@@ -1285,8 +1284,8 @@ function collectImageCandidates(contentRoot) {
   }
 
   function scoreImage(image, src, linkedImage, width, height) {
-    const inBestContentRoot = Boolean(contentRoot && contentRoot !== document.body && contentRoot.contains(image));
-    const inKnownContentRoot = Boolean(image.closest(CONTENT_CONTAINER_SELECTORS.join(",")));
+    const inBestContentRoot = requestedRoots.some((root) => root !== document.body && root.contains(image));
+    const inKnownContentRoot = Boolean(image.closest(CONTENT_CONTAINER_SELECTOR));
     const inNonContentRoot = Boolean(image.closest(NON_CONTENT_CONTAINER_SELECTOR));
     const lowerOcrUrl = String(linkedImage || src || "").toLowerCase();
     const area = width * height;
@@ -1342,6 +1341,12 @@ function collectImageCandidates(contentRoot) {
       if (!src || !ocrUrl || seen.has(ocrUrl)) {
         continue;
       }
+      if (width > 0 && height > 0 && width * height < 16000) {
+        continue;
+      }
+      if (width > 0 && height > 0 && width < 120 && height < 180) {
+        continue;
+      }
       if (isYouTubeThumbnailUrl(src) || isYouTubeThumbnailUrl(linkedImage) || isYouTubeThumbnailUrl(ocrUrl)) {
         continue;
       }
@@ -1375,7 +1380,7 @@ function collectImageCandidates(contentRoot) {
     .map(({ score, ...image }) => image);
 }
 
-function getBestTextSource() {
+function getBestTextSource(options = {}) {
   if (isDcinsidePage()) {
     const dcinsideSource = getDcinsideTextSource();
     if (dcinsideSource.text) {
@@ -1383,27 +1388,27 @@ function getBestTextSource() {
     }
   }
 
-  const selectors = [
-    ...CONTENT_CONTAINER_SELECTORS,
-    "body"
-  ];
   const candidates = [];
+  const seenText = new Set();
 
-  for (const selector of selectors) {
-    for (const element of document.querySelectorAll(selector)) {
-      const text = cleanText(element.innerText || "");
-      if (text && !candidates.some((candidate) => candidate.text === text)) {
-        candidates.push({
-          text,
-          element,
-          priority: selector === "body" ? 0 : 1
-        });
-      }
+  for (const element of document.querySelectorAll(CONTENT_CONTAINER_SELECTOR)) {
+    const text = cleanText(element.innerText || "");
+    if (text && !seenText.has(text)) {
+      seenText.add(text);
+      candidates.push({ text, element, priority: 1 });
     }
+  }
+
+  const bodyText = cleanText(document.body?.innerText || "");
+  if (bodyText && !seenText.has(bodyText)) {
+    candidates.push({ text: bodyText, element: document.body, priority: 0 });
   }
 
   candidates.sort((a, b) => (b.priority - a.priority) || (b.text.length - a.text.length));
   const selectorSource = candidates[0] || { text: cleanText(document.body.innerText || ""), element: document.body };
+  if (options.useDefuddle === false) {
+    return selectorSource;
+  }
   const defuddleSource = collectDefuddleTextSource(selectorSource.element);
 
   if (shouldUseDefuddleSource(defuddleSource, selectorSource)) {
@@ -1535,36 +1540,50 @@ function collectYouTubeTranscript() {
 
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
-  const bestSource = getBestTextSource();
   const xConversation = collectXConversation();
   const kakaku = collectKakakuMetadata();
   const kakakuBbs = collectKakakuBbsMetadata();
+  const danawa = collectDanawaMetadata();
   const kakakuContext = kakaku
     ? collectKakakuPageContext()
     : kakakuBbs
       ? collectKakakuBbsPageContext()
       : "";
+  const dedicatedText = xConversation?.text || kakakuContext;
+  const bestSource = dedicatedText
+    ? { text: "", element: null, extractor: "selectors" }
+    : getBestTextSource({ useDefuddle: !selection });
   const text = cleanText(
-    selection || xConversation?.text || kakakuContext || bestSource.text || document.body.innerText || ""
+    selection || dedicatedText || bestSource.text || document.body.innerText || ""
   );
   const transcript = collectYouTubeTranscript();
+  const siteImageRoots = xConversation
+    ? [xConversation.imageRoot]
+    : kakaku
+      ? Array.from(document.querySelectorAll(".reviewBox"))
+      : kakakuBbs
+        ? Array.from(document.querySelectorAll(".bbsArea .box06"))
+        : null;
+  const strictImageRoots = Boolean(xConversation || kakaku || kakakuBbs);
 
   return {
     title: document.title || location.href,
     url: location.href,
     description: getMetaDescription(),
     text,
-    textSource: xConversation && !selection
-      ? "x conversation"
-      : (kakaku || kakakuBbs) && !selection
-        ? "kakaku product context"
-        : bestSource.extractor || "selectors",
+    textSource: selection
+      ? "selection"
+      : xConversation
+        ? "x conversation"
+        : (kakaku || kakakuBbs)
+          ? "kakaku product context"
+          : bestSource.extractor || "selectors",
     comments: xConversation ? xConversation.comments : collectLikelyComments(text),
     images: isYouTubePage()
       ? []
-      : collectImageCandidates(xConversation?.imageRoot || bestSource.element),
+      : collectImageCandidates(siteImageRoots || bestSource.element, { strictRoots: strictImageRoots }),
     transcript,
-    danawa: collectDanawaMetadata(),
+    danawa,
     kakaku,
     kakakuBbs,
     xCollection: xConversation?.metadata || null,

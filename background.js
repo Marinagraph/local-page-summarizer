@@ -2208,6 +2208,9 @@ function markdownTextBlock(value) {
 }
 
 function toMarkdown(saved) {
+  const exportableOcrResults = Array.isArray(saved.ocrResults)
+    ? saved.ocrResults.filter((result) => String(result?.text || result?.error || "").trim())
+    : [];
   const transcriptSection = saved.transcript && saved.transcript.text
     ? [
       "## YouTube Transcript",
@@ -2218,11 +2221,11 @@ function toMarkdown(saved) {
       ""
     ]
     : [];
-  const ocrSection = saved.ocrResults && saved.ocrResults.length
+  const ocrSection = exportableOcrResults.length
     ? [
       "## Image OCR",
       "",
-      ...saved.ocrResults.flatMap((result) => [
+      ...exportableOcrResults.flatMap((result) => [
         `### Image ${result.index}`,
         "",
         `- URL: ${result.url}`,
