@@ -231,7 +231,7 @@ The build script writes ZIP entries with `/` paths and `ZIP_STORED` so AMO does 
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.36.xpi
+dist\local-page-summarizer-0.3.37.xpi
 ```
 
 ## 개발 검증
@@ -274,6 +274,9 @@ git diff --check
 : Current behavior: comments are collected only from the real visible `ul.cmt_list.add` comment list. Image-adjacent reaction text is not treated as comments.
 : 최신 버전은 `.comment_box` 안의 렌더링된 댓글 행을 직접 수집합니다. 그래도 댓글 후보가 0개로 보이면 페이지가 댓글을 아직 렌더링하지 않은 상태일 수 있으므로 댓글이 화면에 보인 뒤 다시 실행합니다.
 
+`X 답글이 일부만 수집됨`
+: X 게시물 탭에서 필요한 답글이 로드될 때까지 아래로 스크롤한 뒤 실행합니다. 확장은 스크롤 중 DOM에 나타난 답글을 게시물 ID별로 캐시하므로 가상 스크롤로 위쪽 답글이 사라져도 유지하지만, X가 아직 서버에서 불러오지 않은 숨은 답글을 별도로 요청하지는 않습니다.
+
 `popup을 닫으면 작업이 끊기는 문제`
 : 현재 구조에서는 긴 작업을 popup이 아니라 persistent background script가 수행합니다. popup을 닫거나 다른 창을 사용해도 작업은 계속됩니다.
 
@@ -287,6 +290,6 @@ git diff --check
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
-- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. 단, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오고, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오고, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
 - 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.

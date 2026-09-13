@@ -20,6 +20,14 @@ function isInstagramPage() {
   return /(^|\.)instagram\.com$/i.test(location.hostname);
 }
 
+function isXPage() {
+  return /(^|\.)(?:x|twitter)\.com$/i.test(location.hostname);
+}
+
+function isXStatusPage() {
+  return isXPage() && /^\/[^/]+\/status\/\d+(?:\/|$)/i.test(location.pathname);
+}
+
 function isDanawaPage() {
   return /(^|\.)danawa\.com$/i.test(location.hostname);
 }
@@ -536,6 +544,285 @@ function collectInstagramComments() {
   return comments;
 }
 
+const xConversationCache = new Map();
+let xCachedRootStatusId = "";
+let xCaptureTimer = null;
+let xConversationObserver = null;
+
+function xStatusFromHref(value) {
+  try {
+    const url = new URL(value || "", location.href);
+    const match = url.pathname.match(/^\/([^/]+)\/status\/(\d+)(?:\/|$)/i);
+    if (!match) {
+      return null;
+    }
+    return {
+      handle: match[1],
+      statusId: match[2],
+      url: `${url.origin}/${match[1]}/status/${match[2]}`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function xCurrentStatus() {
+  return xStatusFromHref(location.href);
+}
+
+function xTopLevelArticles(root) {
+  return Array.from((root || document).querySelectorAll("article")).filter((article) => (
+    !article.parentElement || !article.parentElement.closest("article")
+  ));
+}
+
+function xArticleStatus(article) {
+  const timeLink = article.querySelector("time")?.closest("a[href*='/status/']");
+  if (timeLink && timeLink.closest("article") === article) {
+    const status = xStatusFromHref(timeLink.getAttribute("href"));
+    if (status) {
+      return { ...status, link: timeLink };
+    }
+  }
+
+  for (const link of article.querySelectorAll("a[href*='/status/']")) {
+    if (link.closest("article") !== article) {
+      continue;
+    }
+    const status = xStatusFromHref(link.getAttribute("href"));
+    if (status) {
+      return { ...status, link };
+    }
+  }
+
+  const linkedContainer = article.closest("[data-href*='/status/']");
+  const status = xStatusFromHref(linkedContainer?.getAttribute("data-href"));
+  return status ? { ...status, link: null } : null;
+}
+
+function xArticleBody(article) {
+  const selectors = [
+    "[data-testid='tweetText']",
+    ".whitespace-pre-wrap.break-words.text-inherit",
+    "[lang][dir='auto']"
+  ];
+
+  for (const selector of selectors) {
+    const candidates = Array.from(article.querySelectorAll(selector)).filter((element) => (
+      element.closest("article") === article && !element.closest("a")
+    ));
+    for (const candidate of candidates) {
+      const text = getElementText(candidate);
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return "";
+}
+
+function xArticleAuthor(article, status) {
+  const expectedPath = `/${String(status && status.handle || "").toLowerCase()}`;
+  const names = [];
+
+  for (const link of article.querySelectorAll("a[href]")) {
+    if (link.closest("article") !== article) {
+      continue;
+    }
+
+    let pathname = "";
+    try {
+      pathname = new URL(link.getAttribute("href"), location.href).pathname.replace(/\/$/, "").toLowerCase();
+    } catch {
+      continue;
+    }
+    if (pathname !== expectedPath) {
+      continue;
+    }
+
+    const name = getElementText(link);
+    if (name && !name.startsWith("@") && !names.includes(name)) {
+      names.push(name);
+    }
+  }
+
+  return names[0] || "";
+}
+
+function xEmbeddedContent(article) {
+  const entries = [];
+  const seen = new Set();
+
+  for (const nested of article.querySelectorAll("article article")) {
+    if (nested.parentElement?.closest("article") !== article) {
+      continue;
+    }
+    const text = getElementText(nested);
+    if (text && !seen.has(text)) {
+      seen.add(text);
+      entries.push(text);
+    }
+  }
+
+  return cleanText(entries.join("\n\n"));
+}
+
+function xConversationRoot(originalArticle) {
+  const list = originalArticle?.closest("ul, ol, [role='list']");
+  if (list && xTopLevelArticles(list).length) {
+    return list;
+  }
+
+  const timeline = originalArticle?.closest(
+    "[aria-label*='Timeline' i], [aria-label*='타임라인' i]"
+  );
+  if (timeline) {
+    return timeline;
+  }
+
+  const roots = Array.from(document.querySelectorAll("main ul, main ol, main [role='list']"));
+  roots.sort((a, b) => xTopLevelArticles(b).length - xTopLevelArticles(a).length);
+  return roots[0] || document.querySelector("main") || document;
+}
+
+function xHasRecommendationBoundary(root, originalArticle, article) {
+  const boundaryPattern = /^(discover more|more posts|you might like|더 찾아보기|추천 게시물|관련 게시물)$/i;
+  return Array.from(root.querySelectorAll("h1, h2, h3, [role='heading']")).some((heading) => {
+    if (!boundaryPattern.test(getElementText(heading))) {
+      return false;
+    }
+    const afterOriginal = !originalArticle || Boolean(
+      originalArticle.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    const beforeArticle = Boolean(
+      heading.compareDocumentPosition(article) & Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    return afterOriginal && beforeArticle;
+  });
+}
+
+function xPostRecord(article) {
+  const status = xArticleStatus(article);
+  const body = xArticleBody(article);
+  if (!status || !body) {
+    return null;
+  }
+
+  const date = getElementText(article.querySelector("time")) || getElementText(status.link);
+  return {
+    statusId: status.statusId,
+    handle: status.handle,
+    author: xArticleAuthor(article, status),
+    date,
+    url: status.url,
+    body,
+    embedded: xEmbeddedContent(article)
+  };
+}
+
+function captureXConversationPosts() {
+  const current = xCurrentStatus();
+  if (!current) {
+    return;
+  }
+  const rootChanged = xCachedRootStatusId !== current.statusId;
+  if (rootChanged) {
+    xConversationCache.clear();
+    xCachedRootStatusId = current.statusId;
+  }
+
+  const allArticles = xTopLevelArticles(document.querySelector("main") || document);
+  const originalArticle = allArticles.find((article) => (
+    xArticleStatus(article)?.statusId === current.statusId
+  ));
+  if (rootChanged && !originalArticle) {
+    return;
+  }
+  const root = xConversationRoot(originalArticle);
+  const articles = xTopLevelArticles(root);
+  const originalIndex = originalArticle ? articles.indexOf(originalArticle) : -1;
+
+  for (let index = Math.max(0, originalIndex); index < articles.length; index += 1) {
+    const article = articles[index];
+    if (xHasRecommendationBoundary(root, originalArticle, article)) {
+      break;
+    }
+    const record = xPostRecord(article);
+    if (record && !xConversationCache.has(record.statusId)) {
+      xConversationCache.set(record.statusId, record);
+    }
+  }
+}
+
+function formatXPost(record, original = false) {
+  const metadata = [
+    record.author ? `작성자: ${record.author}` : "",
+    record.handle ? `계정: @${record.handle}` : "",
+    record.date ? `등록: ${record.date}` : "",
+    `게시물 ID: ${record.statusId}`,
+    record.url ? `URL: ${record.url}` : ""
+  ].filter(Boolean).join(" | ");
+  return cleanText([
+    `[X ${original ? "게시물" : "답글"}] ${metadata}`,
+    `본문:\n${record.body}`,
+    record.embedded ? `인용/첨부 콘텐츠:\n${record.embedded}` : ""
+  ].filter(Boolean).join("\n"));
+}
+
+function collectXConversation() {
+  if (!isXStatusPage()) {
+    return null;
+  }
+
+  captureXConversationPosts();
+  const current = xCurrentStatus();
+  const originalArticle = xTopLevelArticles(document.querySelector("main") || document).find((article) => (
+    xArticleStatus(article)?.statusId === current.statusId
+  ));
+  const original = xConversationCache.get(current.statusId);
+  const fallbackBody = getMetaDescription() || getElementText(document.querySelector("main h1"));
+  const originalRecord = original || {
+    ...current,
+    author: "",
+    date: "",
+    body: fallbackBody,
+    embedded: ""
+  };
+  const comments = Array.from(xConversationCache.values())
+    .filter((record) => record.statusId !== current.statusId)
+    .map((record) => formatXPost(record, false));
+
+  return {
+    text: formatXPost(originalRecord, true),
+    comments,
+    metadata: {
+      statusId: current.statusId,
+      loadedReplyCount: comments.length
+    },
+    imageRoot: originalArticle || null
+  };
+}
+
+function scheduleXConversationCapture() {
+  if (xCaptureTimer !== null) {
+    return;
+  }
+  xCaptureTimer = setTimeout(() => {
+    xCaptureTimer = null;
+    captureXConversationPosts();
+  }, 120);
+}
+
+function startXConversationObserver() {
+  if (!isXPage() || xConversationObserver || !document.documentElement) {
+    return;
+  }
+  captureXConversationPosts();
+  xConversationObserver = new MutationObserver(scheduleXConversationCapture);
+  xConversationObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
+
 function isDanawaUiLine(line) {
   return (
     /^(report|reply|delete|edit|more|collapse|recommend|not recommend)$/i.test(line) ||
@@ -783,6 +1070,10 @@ function collectLikelyComments(pageText) {
 
   if (isInstagramPage()) {
     return collectInstagramComments();
+  }
+
+  if (isXStatusPage()) {
+    return collectXConversation()?.comments || [];
   }
 
   if (isDanawaPage()) {
@@ -1245,6 +1536,7 @@ function collectYouTubeTranscript() {
 function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const bestSource = getBestTextSource();
+  const xConversation = collectXConversation();
   const kakaku = collectKakakuMetadata();
   const kakakuBbs = collectKakakuBbsMetadata();
   const kakakuContext = kakaku
@@ -1252,7 +1544,9 @@ function collectPage() {
     : kakakuBbs
       ? collectKakakuBbsPageContext()
       : "";
-  const text = cleanText(selection || kakakuContext || bestSource.text || document.body.innerText || "");
+  const text = cleanText(
+    selection || xConversation?.text || kakakuContext || bestSource.text || document.body.innerText || ""
+  );
   const transcript = collectYouTubeTranscript();
 
   return {
@@ -1260,17 +1554,26 @@ function collectPage() {
     url: location.href,
     description: getMetaDescription(),
     text,
-    textSource: (kakaku || kakakuBbs) && !selection ? "kakaku product context" : bestSource.extractor || "selectors",
-    comments: collectLikelyComments(text),
-    images: isYouTubePage() ? [] : collectImageCandidates(bestSource.element),
+    textSource: xConversation && !selection
+      ? "x conversation"
+      : (kakaku || kakakuBbs) && !selection
+        ? "kakaku product context"
+        : bestSource.extractor || "selectors",
+    comments: xConversation ? xConversation.comments : collectLikelyComments(text),
+    images: isYouTubePage()
+      ? []
+      : collectImageCandidates(xConversation?.imageRoot || bestSource.element),
     transcript,
     danawa: collectDanawaMetadata(),
     kakaku,
     kakakuBbs,
+    xCollection: xConversation?.metadata || null,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
   };
 }
+
+startXConversationObserver();
 
 browser.runtime.onMessage.addListener((message) => {
   if (message && message.type === "COLLECT_PAGE") {

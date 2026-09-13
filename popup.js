@@ -181,6 +181,10 @@ function toMarkdown(saved) {
       `- Kakaku BBS threads: ${saved.kakakuBbsCollection.threadCount} across ${saved.kakakuBbsCollection.pagesFetched} pages`,
       `- Kakaku BBS posts: ${saved.kakakuBbsCollection.postCount}`
     ] : []),
+    ...(saved.xCollection ? [
+      `- X status ID: ${saved.xCollection.statusId}`,
+      `- X loaded replies: ${saved.xCollection.loadedReplyCount}`
+    ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
     ] : []),
@@ -223,6 +227,9 @@ function renderMetaFromSaved(saved) {
       : "",
     saved.kakakuBbsCollection
       ? `가격닷컴 BBS 스레드 ${saved.kakakuBbsCollection.threadCount.toLocaleString()}개 / 원글·답글 ${saved.kakakuBbsCollection.postCount.toLocaleString()}개 / ${saved.kakakuBbsCollection.pagesFetched}페이지`
+      : "",
+    saved.xCollection
+      ? `X 답글 ${saved.xCollection.loadedReplyCount.toLocaleString()}개`
       : "",
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,

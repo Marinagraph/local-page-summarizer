@@ -965,6 +965,9 @@ function pageContext(page) {
     page.kakakuBbsCollection
       ? `가격닷컴 BBS 전체 수집: 스레드 ${page.kakakuBbsCollection.threadCount.toLocaleString()}개, 원글·답글 ${page.kakakuBbsCollection.postCount.toLocaleString()}개, ${page.kakakuBbsCollection.pagesFetched}페이지`
       : "",
+    page.xCollection
+      ? `X 현재 대화 수집: 답글 ${page.xCollection.loadedReplyCount.toLocaleString()}개`
+      : "",
     `이미지 후보: ${(page.images || []).length.toLocaleString()}개`,
     `OCR 결과: ${(page.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     `YouTube transcript: ${page.transcript && page.transcript.text ? "있음" : "없음"}`
@@ -2274,6 +2277,10 @@ function toMarkdown(saved) {
     ...(saved.kakakuBbsCollection ? [
       `- Kakaku BBS threads: ${saved.kakakuBbsCollection.threadCount} across ${saved.kakakuBbsCollection.pagesFetched} pages`,
       `- Kakaku BBS posts: ${saved.kakakuBbsCollection.postCount}`
+    ] : []),
+    ...(saved.xCollection ? [
+      `- X status ID: ${saved.xCollection.statusId}`,
+      `- X loaded replies: ${saved.xCollection.loadedReplyCount}`
     ] : []),
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
