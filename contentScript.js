@@ -1184,11 +1184,12 @@ function scheduleXConversationCapture() {
 
 function startXConversationObserver() {
   if (!isXPage() || xConversationObserver || !document.documentElement) {
-    return;
+    return null;
   }
   captureXConversationPosts();
   xConversationObserver = new MutationObserver(scheduleXConversationCapture);
   xConversationObserver.observe(document.documentElement, { childList: true, subtree: true });
+  return xConversationObserver;
 }
 
 function isDanawaUiLine(line) {
@@ -1994,19 +1995,29 @@ async function collectPage() {
 
 globalThis.__localPageSummarizerCollectPage = collectPage;
 
-if (!globalThis.__localPageSummarizerMessageListenerInstalled) {
-  globalThis.__localPageSummarizerMessageListenerInstalled = true;
-  browser.runtime.onMessage.addListener((message) => {
-    if (message && message.type === "COLLECT_PAGE") {
-      return globalThis.__localPageSummarizerCollectPage();
-    }
-
-    return false;
-  });
+if (globalThis.__localPageSummarizerMessageListener) {
+  try {
+    browser.runtime.onMessage.removeListener(globalThis.__localPageSummarizerMessageListener);
+  } catch {
+    // A listener from a previous extension context cannot be removed after an update.
+  }
 }
 
-if (!globalThis.__localPageSummarizerXObserverInstalled) {
-  globalThis.__localPageSummarizerXObserverInstalled = true;
-  startXConversationObserver();
+globalThis.__localPageSummarizerMessageListener = (message) => {
+  if (message && message.type === "COLLECT_PAGE") {
+    return globalThis.__localPageSummarizerCollectPage();
+  }
+
+  return false;
+};
+browser.runtime.onMessage.addListener(globalThis.__localPageSummarizerMessageListener);
+
+if (globalThis.__localPageSummarizerXObserver) {
+  try {
+    globalThis.__localPageSummarizerXObserver.disconnect();
+  } catch {
+    // Ignore stale observers left by a previous extension context.
+  }
 }
+globalThis.__localPageSummarizerXObserver = startXConversationObserver();
 })();
