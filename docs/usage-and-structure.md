@@ -205,7 +205,7 @@ https://image.dcinside.com/viewimagePop.php?...
 
 Amazon의 `/portal/customer-reviews/ASIN/` 리뷰 화면에서 실행하면 현재 별점의 `Show 10 more reviews` 버튼을 더 이상 리뷰가 늘지 않을 때까지 자동으로 누릅니다. 이어서 빠진 1점, 2점, 3점 필터를 비활성 임시 탭에서 순차적으로 열어 같은 방식으로 수집하고, 수집이 끝난 탭은 즉시 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
 
-리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다.
+리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
 
 ## 저장 위치
 
@@ -237,7 +237,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.39.xpi
+dist\local-page-summarizer-0.3.40.xpi
 ```
 
 ## 개발 검증

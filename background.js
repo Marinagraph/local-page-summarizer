@@ -29,6 +29,18 @@ let activeJob = null;
 let activeAbortController = null;
 const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
 
+async function fetchWithConnectionContext(url, options, label) {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      throw error;
+    }
+    const detail = error && error.message ? error.message : String(error);
+    throw new Error(`${label} 연결 실패 (${url}): ${detail}`);
+  }
+}
+
 function storageKeyFor(url) {
   return `page:${url}`;
 }
@@ -1446,14 +1458,14 @@ async function requestChatCompletion(model, messages, signal, maxTokens, request
   if (requestOptions.disableThinking) {
     payload.reasoning_effort = "none";
   }
-  const response = await fetch(LM_STUDIO_ENDPOINT, {
+  const response = await fetchWithConnectionContext(LM_STUDIO_ENDPOINT, {
     method: "POST",
     signal,
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
-  });
+  }, "LM Studio");
 
   if (!response.ok) {
     return {
@@ -2020,7 +2032,11 @@ function resolveConfiguredModel(configuredModel, models) {
 }
 
 async function fetchNativeLmStudioModels(signal) {
-  const response = await fetch(LM_STUDIO_NATIVE_MODELS_ENDPOINT, { signal });
+  const response = await fetchWithConnectionContext(
+    LM_STUDIO_NATIVE_MODELS_ENDPOINT,
+    { signal },
+    "LM Studio 모델 목록"
+  );
   if (response.status === 404 || response.status === 405) {
     return null;
   }
@@ -2085,12 +2101,12 @@ function chooseLoadedLmStudioModel(loadedModels, configuredModel) {
 }
 
 async function loadLmStudioModel(modelKey, signal) {
-  const response = await fetch(LM_STUDIO_LOAD_MODEL_ENDPOINT, {
+  const response = await fetchWithConnectionContext(LM_STUDIO_LOAD_MODEL_ENDPOINT, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: modelKey, echo_load_config: true })
-  });
+  }, "LM Studio 모델 로드");
   const responseText = await response.text();
   let data = {};
   if (responseText) {
@@ -2115,7 +2131,11 @@ async function loadLmStudioModel(modelKey, signal) {
 
 async function resolveLegacyModelName(configuredModel, signal) {
   const requested = (configuredModel || "").trim();
-  const response = await fetch(LM_STUDIO_MODELS_ENDPOINT, { signal });
+  const response = await fetchWithConnectionContext(
+    LM_STUDIO_MODELS_ENDPOINT,
+    { signal },
+    "LM Studio 모델 목록"
+  );
   if (!response.ok) {
     throw new Error(`LM Studio 모델 목록 요청 실패: ${response.status}`);
   }
@@ -2204,7 +2224,7 @@ async function enrichPageWithOcr(page, settings, signal) {
 
   const preparedImages = await Promise.all(images.map((image) => prepareImageForOcr(image, signal)));
   const endpoint = settings.ocrEndpoint || DEFAULT_OCR_ENDPOINT;
-  const response = await fetch(endpoint, {
+  const response = await fetchWithConnectionContext(endpoint, {
     method: "POST",
     signal,
     headers: {
@@ -2214,7 +2234,7 @@ async function enrichPageWithOcr(page, settings, signal) {
       pageUrl: page.url,
       images: preparedImages
     })
-  });
+  }, "OCR 서버");
 
   if (!response.ok) {
     const errorText = await response.text();

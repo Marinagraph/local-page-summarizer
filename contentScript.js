@@ -1813,7 +1813,7 @@ async function collectPage() {
       : amazonReviews
         ? amazonReviews.comments
         : collectLikelyComments(text),
-    images: isYouTubePage()
+    images: isYouTubePage() || amazon
       ? []
       : collectImageCandidates(siteImageRoots || bestSource.element, { strictRoots: strictImageRoots }),
     transcript,
