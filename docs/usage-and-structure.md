@@ -206,7 +206,7 @@ https://image.dcinside.com/viewimagePop.php?...
 
 상품 페이지에서 `Save & Summarize`를 한 번 실행하면 됩니다. 리뷰 상세 페이지를 직접 열거나 별점별로 반복 실행할 필요가 없습니다. 확장이 같은 창과 로그인 컨테이너에 비활성 임시 탭을 만들고 수집 후 닫습니다. 컨테이너 유지를 위해 `cookies` 권한을 사용하며 쿠키 값을 읽거나 저장하지 않습니다. 임시 탭의 초기 `about:blank` 상태는 웹페이지 로딩 완료까지 기다립니다.
 
-Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/` 리뷰 화면에서 실행할 수 있습니다. `/-/en/`처럼 언어 경로가 앞에 붙어도 그대로 유지합니다. background는 1점, 2점, 3점 필터를 비활성 임시 탭에서 각각 열고, 각 화면의 `Show 10 more reviews` 버튼을 더 이상 리뷰가 늘지 않을 때까지 자동으로 누른 뒤 탭을 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
+Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/`, `/product-reviews/ASIN/` 리뷰 화면에서 실행할 수 있습니다. 상품 페이지에서 시작하면 화면의 실제 `See all reviews` 링크를 통해 리뷰 화면을 연 뒤, 리뷰 화면에 렌더링된 1점, 2점, 3점 필터 링크를 따라갑니다. `/-/en/`처럼 언어 경로가 앞에 붙어도 Amazon 링크를 그대로 사용합니다. 실제 전체 리뷰 링크를 찾지 못하면 임의 주소를 만들지 않고 구체적인 오류를 표시합니다. 각 별점 화면에서는 `Show 10 more reviews`를 끝까지 누르고, 카드의 `Read more`도 펼친 후 수집합니다. 완료한 임시 탭은 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
 
 Amazon 화면의 `global ratings` 수치는 별점만 남긴 사용자까지 포함할 수 있으므로 서면 리뷰 개수와 같지 않습니다. 결과에는 Amazon이 표시한 평점 수와 실제로 수집한 1~3점 서면 리뷰 수를 별도로 기록합니다. 리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 상품과 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
 
@@ -242,7 +242,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.47.xpi
+dist\local-page-summarizer-0.3.48.xpi
 ```
 
 ## 개발 검증

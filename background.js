@@ -128,22 +128,12 @@ function isAmazonReviewCollection(page) {
   try {
     const url = new URL(page.url);
     return isAmazonHostname(url.hostname) && (
-      /(?:^|\/)portal\/customer-reviews\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname) ||
+      /(?:^|\/)(?:portal\/customer-reviews|product-reviews)\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname) ||
       /(?:^|\/)dp\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname)
     );
   } catch {
     return false;
   }
-}
-
-function amazonReviewUrl(page, filterName) {
-  const source = new URL(page.url);
-  const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
-  const localePrefix = /^\/-\/[^/]+$/i.test(String(page.amazon.localePrefix || ""))
-    ? page.amazon.localePrefix
-    : "";
-  return `${source.origin}${localePrefix}/portal/customer-reviews/${page.amazon.asin}/ref=acr_dp_hist_${star}` +
-    `?ie=UTF8&reviewerType=all_reviews&filterByStar=${filterName}#reviews-filter-bar`;
 }
 
 function waitForTabComplete(tabId, signal) {
@@ -214,23 +204,55 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress, sourc
     if (onProgress) {
       await onProgress(`Amazon ${star}점 리뷰 페이지 여는 중...`);
     }
+    const reviewPortalUrl = page.amazon.reviewPortalUrl || (page.amazon.pageType === "review" ? page.url : "");
+    if (!reviewPortalUrl) {
+      throw new Error(`Amazon 상품 페이지에서 ASIN ${page.amazon.asin}의 실제 전체 리뷰 링크를 찾지 못했습니다.`);
+    }
     const sourceTab = sourceTabId == null ? null : await browser.tabs.get(sourceTabId);
     const tab = await browser.tabs.create({
-      url: amazonReviewUrl(page, filterName),
+      url: reviewPortalUrl,
       active: false,
       ...(sourceTab?.cookieStoreId ? { cookieStoreId: sourceTab.cookieStoreId } : {}),
       ...(sourceTab?.windowId != null ? { windowId: sourceTab.windowId } : {})
     });
     tabId = tab.id;
     await waitForTabComplete(tabId, signal);
-    const collected = await collectPageFromTab(tabId);
+    const link = await browser.tabs.sendMessage(tabId, {
+      type: "GET_AMAZON_STAR_FILTER_URL",
+      filterName
+    }, { frameId: 0 });
+    if (!link?.url) {
+      const current = await browser.tabs.get(tabId);
+      throw new Error(`Amazon ${star}점 필터 링크를 리뷰 페이지에서 찾지 못했습니다. 현재 주소: ${current.url || "주소 없음"}`);
+    }
+    const filterUrl = new URL(link.url);
     if (
-      !isAmazonReviewCollection(collected) ||
-      collected.amazon.pageType !== "review" ||
-      collected.amazon.asin.toUpperCase() !== page.amazon.asin.toUpperCase() ||
-      Number(collected.amazon.currentStar) !== star
+      !isAmazonHostname(filterUrl.hostname) ||
+      amazonReviewPathMatch(filterUrl.pathname)?.[1]?.toUpperCase() !== page.amazon.asin.toUpperCase() ||
+      filterUrl.searchParams.get("filterByStar") !== filterName
     ) {
-      throw new Error(`Amazon ${star}점 리뷰 페이지를 열지 못했습니다. Amazon 로그인 상태를 확인하세요.`);
+      throw new Error(`Amazon ${star}점 리뷰 링크가 예상한 별점 필터를 가리키지 않습니다: ${link.url}`);
+    }
+    await browser.tabs.update(tabId, { url: filterUrl.href });
+    await waitForTabUrl(tabId, (url) => {
+      try {
+        return new URL(url).searchParams.get("filterByStar") === filterName;
+      } catch {
+        return false;
+      }
+    }, signal);
+    const collected = await collectPageFromTab(tabId);
+    if (/\/ap\/signin(?:\/|$)/i.test(new URL(collected.url).pathname)) {
+      throw new Error(`Amazon ${star}점 리뷰 요청이 로그인 화면으로 이동했습니다: ${collected.url}`);
+    }
+    if (!collected.amazon || collected.amazon.pageType !== "review") {
+      throw new Error(`Amazon ${star}점 요청이 리뷰 페이지가 아닌 화면으로 이동했습니다. 제목: ${collected.title || "없음"}; 주소: ${collected.url}`);
+    }
+    if (collected.amazon.asin.toUpperCase() !== page.amazon.asin.toUpperCase()) {
+      throw new Error(`Amazon ASIN이 다릅니다. 요청 ${page.amazon.asin}, 실제 ${collected.amazon.asin}; 주소: ${collected.url}`);
+    }
+    if (Number(collected.amazon.currentStar) !== star) {
+      throw new Error(`Amazon 별점 필터가 다릅니다. 요청 ${star}점, 실제 ${collected.amazon.currentStar}; 주소: ${collected.url}`);
     }
     if (collected.amazon.expansionStoppedAtLimit) {
       throw new Error(`Amazon ${star}점 리뷰가 안전 한도보다 많아 전체 수집을 완료하지 못했습니다.`);
@@ -244,6 +266,41 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress, sourc
       await browser.tabs.remove(tabId).catch(() => {});
     }
   }
+}
+
+function waitForTabUrl(tabId, predicate, signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId;
+    let pollId;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      clearTimeout(timeoutId);
+      clearTimeout(pollId);
+      error ? reject(error) : resolve();
+    };
+    const check = async () => {
+      if (settled) return;
+      try {
+        const tab = await browser.tabs.get(tabId);
+        if (tab.status === "complete" && predicate(tab.url || "")) return finish();
+      } catch (error) {
+        return finish(error);
+      }
+      pollId = setTimeout(check, 200);
+    };
+    const onUpdated = (updatedTabId) => {
+      if (updatedTabId === tabId) check();
+    };
+    const onAbort = () => finish(new Error("Amazon review collection was cancelled."));
+    browser.tabs.onUpdated.addListener(onUpdated);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    timeoutId = setTimeout(() => finish(new Error("Amazon star filter navigation timed out.")), AMAZON_REVIEW_TAB_TIMEOUT_MS);
+    check();
+  });
 }
 
 async function enrichPageWithAmazonReviews(page, signal, onProgress, sourceTabId) {

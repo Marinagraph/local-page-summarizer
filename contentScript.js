@@ -47,8 +47,12 @@ function isAmazonPage() {
   return /(^|\.)amazon\.(?:com|ca|com\.mx|com\.br|co\.uk|de|fr|it|es|nl|se|pl|com\.be|co\.jp|in|com\.au|sg|ae|sa|com\.tr)$/i.test(location.hostname);
 }
 
+function isAmazonHostname(hostname) {
+  return /(^|\.)amazon\.(?:com|ca|com\.mx|com\.br|co\.uk|de|fr|it|es|nl|se|pl|com\.be|co\.jp|in|com\.au|sg|ae|sa|com\.tr)$/i.test(String(hostname || ""));
+}
+
 function amazonReviewPathMatch(pathname = location.pathname) {
-  return String(pathname || "").match(/(?:^|\/)portal\/customer-reviews\/([A-Z0-9]{10})(?:\/|$)/i);
+  return String(pathname || "").match(/(?:^|\/)(?:portal\/customer-reviews|product-reviews)\/([A-Z0-9]{10})(?:\/|$)/i);
 }
 
 function amazonProductPathMatch(pathname = location.pathname) {
@@ -88,6 +92,21 @@ function collectAmazonMetadata(expansion = {}) {
   const reviewBasePath = `${localePrefix}/portal/customer-reviews/${asin}`;
   const filter = new URL(location.href).searchParams.get("filterByStar") || "all_stars";
   const reviewUrls = {};
+  const reviewPortalLinks = document.querySelectorAll([
+    "a[data-hook='see-all-reviews-link-foot']",
+    "#reviews-medley-footer a[href*='customer-reviews/'], #reviews-medley-footer a[href*='product-reviews/']",
+    "#acrCustomerReviewLink[href*='customer-reviews/'], #acrCustomerReviewLink[href*='product-reviews/']",
+    "a[href*='customer-reviews/'][href*='reviewerType=all_reviews'], a[href*='product-reviews/'][href*='reviewerType=all_reviews']",
+    "a[href*='customer-reviews/'], a[href*='product-reviews/']"
+  ].join(","));
+  const reviewPortalUrl = Array.from(reviewPortalLinks).map((link) => link.href).find((href) => {
+    try {
+      const url = new URL(href);
+      return isAmazonHostname(url.hostname) && amazonReviewPathMatch(url.pathname)?.[1]?.toUpperCase() === asin.toUpperCase();
+    } catch {
+      return false;
+    }
+  }) || "";
   const ratingsText = cleanText([
     getElementText(document.querySelector("#acrCustomerReviewText")),
     getElementText(document.querySelector("[data-hook='total-review-count']")),
@@ -109,6 +128,7 @@ function collectAmazonMetadata(expansion = {}) {
     pageType: isAmazonReviewPage() ? "review" : "product",
     localePrefix,
     reviewBasePath,
+    reviewPortalUrl,
     filter,
     currentStar: amazonStarForFilter(filter),
     reportedRatings,
@@ -117,6 +137,48 @@ function collectAmazonMetadata(expansion = {}) {
     expansionStopReason: String(expansion.stopReason || "not_started"),
     expansionStoppedAtLimit: Boolean(expansion.stoppedAtLimit)
   };
+}
+
+function amazonStarFilterUrl(filterName) {
+  const asin = (amazonReviewPathMatch() || [])[1] || "";
+  if (!asin) return "";
+  for (const link of document.querySelectorAll("a[href*='filterByStar='], [data-url*='filterByStar=']")) {
+    const href = link.href || link.getAttribute("data-url") || "";
+    if (!href) continue;
+    try {
+      const url = new URL(href, location.href);
+      if (
+        isAmazonHostname(url.hostname) &&
+        amazonReviewPathMatch(url.pathname)?.[1]?.toUpperCase() === asin.toUpperCase() &&
+        url.searchParams.get("filterByStar") === filterName
+      ) {
+        return url.href;
+      }
+    } catch {
+      // Ignore malformed filter links.
+    }
+  }
+  return "";
+}
+
+async function expandAmazonReviewBodies() {
+  const candidates = [];
+  for (const card of amazonReviewCards()) {
+    for (const element of card.querySelectorAll("a, button, [role='button'], [data-action*='expand' i]")) {
+      const label = cleanText([
+        element.textContent || "",
+        element.getAttribute("aria-label") || "",
+        element.getAttribute("data-action") || ""
+      ].join(" "));
+      if (/^(?:read more|see more|continue reading)$/i.test(label) && isRenderedElement(element)) {
+        candidates.push(element);
+      }
+    }
+  }
+  for (const element of candidates) {
+    element.click();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 function amazonReviewCards() {
@@ -1914,6 +1976,7 @@ function collectYouTubeTranscript() {
 async function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
   const amazonExpansion = shouldExpandCurrentAmazonReviews() ? await expandAmazonReviews() : null;
+  if (isAmazonReviewPage()) await expandAmazonReviewBodies();
   const amazonReviews = isAmazonCollectionPage() ? collectAmazonReviews() : null;
   const amazon = collectAmazonMetadata(amazonExpansion || {});
   const xConversation = collectXConversation();
@@ -2009,6 +2072,9 @@ globalThis.__localPageSummarizerMessageListener = (message) => {
   }
   if (message && message.type === "COLLECT_PAGE") {
     return globalThis.__localPageSummarizerCollectPage();
+  }
+  if (message && message.type === "GET_AMAZON_STAR_FILTER_URL") {
+    return Promise.resolve({ url: amazonStarFilterUrl(String(message.filterName || "")) });
   }
 
   return false;

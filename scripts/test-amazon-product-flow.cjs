@@ -7,12 +7,19 @@ const source = fs.readFileSync(path.join(__dirname, '../background.js'), 'utf8')
 
 async function run(host, prefix) {
   const url = `https://${host}${prefix}/Lightweight-Removable-Power-Cordless-Telescopic-VS20R9046T3/dp/B087V5LZMH?ie=UTF8`;
+  const portalUrl = `https://${host}${prefix}/portal/customer-reviews/B087V5LZMH/ref=cm_cr_dp_d_show_all_top?reviewerType=all_reviews`;
   const product = { url, text: 'Samsung cordless vacuum', comments: [], amazon: {
-    asin: 'B087V5LZMH', pageType: 'product', localePrefix: prefix, currentStar: 0
+    asin: 'B087V5LZMH', pageType: 'product', localePrefix: prefix, currentStar: 0, reviewPortalUrl: portalUrl
   } };
   const tabs = new Map();
   const closed = [];
   const created = [];
+  const renderedStarLinks = Object.fromEntries(['one_star', 'two_star', 'three_star'].map((filter) => {
+    const href = new URL(portalUrl);
+    href.searchParams.set('filterByStar', filter);
+    href.searchParams.set('ref_', `amazon_rendered_filter_${filter}`);
+    return [filter, href.href];
+  }));
   const browser = {
     runtime: { getManifest: () => ({ version }), onMessage: { addListener() {} } },
     tabs: {
@@ -27,17 +34,21 @@ async function run(host, prefix) {
         assert.equal(options.active, false);
         assert.equal(options.windowId, 5);
         assert.equal(options.cookieStoreId, 'firefox-container-2');
-        assert.ok(options.url.startsWith(`https://${host}${prefix}/portal/customer-reviews/B087V5LZMH/`));
+        assert.equal(options.url, portalUrl);
         const id = created.length + 2;
         tabs.set(id, { url: options.url, reads: 0 });
         created.push(id);
         return { id };
       },
+      update: async (id, update) => { tabs.get(id).url = update.url; return { id, ...update, status: 'complete' }; },
       remove: async (id) => closed.push(id),
       sendMessage: async (id, message) => {
         if (message.type === 'SUMMARIZER_READY') return { ready: true, version };
         if (id === 1) return product;
         const reviewUrl = tabs.get(id).url;
+        if (message.type === 'GET_AMAZON_STAR_FILTER_URL') {
+          return { url: renderedStarLinks[message.filterName] };
+        }
         const star = ['one_star', 'two_star', 'three_star'].indexOf(new URL(reviewUrl).searchParams.get('filterByStar')) + 1;
         return { url: reviewUrl, amazon: { asin: 'B087V5LZMH', pageType: 'review', currentStar: star },
           comments: [`[Amazon review | ${star}/5 | R${star}]\nBody: Full original review ${star}`] };
