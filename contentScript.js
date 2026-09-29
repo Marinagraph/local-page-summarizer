@@ -160,6 +160,78 @@ function amazonReviewField(card, selector) {
   return getElementText(card.querySelector(selector));
 }
 
+function amazonReviewBody(card) {
+  const selectors = [
+    "[data-hook='review-body']",
+    "[data-hook='review-collapsed']",
+    "[data-hook='review-expanded']",
+    ".review-text-content",
+    ".review-text",
+    ".cr-original-review-content"
+  ];
+
+  for (const selector of selectors) {
+    const element = card.querySelector(selector);
+    if (!element) {
+      continue;
+    }
+
+    const clone = element.cloneNode(true);
+    for (const unwanted of clone.querySelectorAll([
+      "script",
+      "style",
+      "button",
+      "[data-action='a-expander-toggle']",
+      ".a-expander-prompt",
+      "[data-hook='avp-badge']",
+      "[data-hook='avp-badge-linkless']"
+    ].join(","))) {
+      unwanted.remove();
+    }
+
+    const text = cleanText(clone.textContent || "")
+      .replace(/\s*(?:Read more|Show less)\s*$/i, "")
+      .trim();
+    if (text && !/^(?:Verified Purchase|Vine Customer Review of Free Product)$/i.test(text)) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function collectAmazonProductContext() {
+  if (!isAmazonProductPage()) {
+    return "";
+  }
+
+  const sections = [
+    ["Product", "#productTitle, h1"],
+    ["Summary", "meta[name='description'], meta[property='og:description']"],
+    ["Features", "#feature-bullets"],
+    ["Overview", "#productOverview_feature_div, #productOverview_feature_div table"],
+    ["Specifications", "#detailBullets_feature_div, #productDetails_techSpec_section_1, #productDetails_techSpec_section_2"],
+    ["Description", "#productDescription, #aplus, [data-feature-name='productDescription']"],
+    ["Important information", "#important-information, #productImportantInformation_feature_div"]
+  ];
+  const values = [];
+  const seen = new Set();
+
+  for (const [label, selector] of sections) {
+    const element = document.querySelector(selector);
+    const text = element?.tagName === "META"
+      ? cleanText(element.getAttribute("content") || "")
+      : getElementText(element);
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    values.push(`${label}:\n${text}`);
+  }
+
+  return cleanText(values.join("\n\n"));
+}
+
 function collectAmazonReviews() {
   if (!isAmazonCollectionPage()) {
     return { comments: [], starCounts: {}, cardCount: 0 };
@@ -184,7 +256,7 @@ function collectAmazonReviews() {
     const title = amazonReviewField(card, "[data-hook='review-title'], .review-title")
       .replace(/^\s*[1-5](?:\.0)?\s*(?:out of 5|of 5)?\s*stars?\s*/i, "")
       .trim();
-    const body = amazonReviewField(card, "[data-hook='review-body'], .review-text, .review-data");
+    const body = amazonReviewBody(card);
     if (!body) {
       continue;
     }
@@ -203,9 +275,13 @@ function collectAmazonReviews() {
     starCounts[rating] += 1;
     comments.push(cleanText([
       `[Amazon review | ${rating}/5${reviewId ? ` | ${reviewId}` : ""}]`,
-      [author, date, verified, variant, helpful].filter(Boolean).join(" | "),
-      title,
-      body
+      author ? `Author: ${author}` : "",
+      date ? `Date: ${date}` : "",
+      verified ? "Verified purchase" : "",
+      variant ? `Variant: ${variant}` : "",
+      title ? `Title: ${title}` : "",
+      `Body: ${body}`,
+      helpful ? `Helpful: ${helpful}` : ""
     ].filter(Boolean).join("\n")));
   }
 
@@ -1822,7 +1898,8 @@ async function collectPage() {
       `Amazon review filter: ${amazon.filter}`
     ].filter(Boolean).join("\n"))
     : "";
-  const dedicatedText = xConversation?.text || kakakuContext || amazonContext;
+  const amazonProductContext = amazon ? collectAmazonProductContext() : "";
+  const dedicatedText = xConversation?.text || kakakuContext || amazonContext || amazonProductContext;
   const bestSource = dedicatedText
     ? { text: "", element: null, extractor: "selectors" }
     : getBestTextSource({ useDefuddle: !selection });
@@ -1852,8 +1929,8 @@ async function collectPage() {
         ? "x conversation"
         : (kakaku || kakakuBbs)
           ? "kakaku product context"
-          : amazon && isAmazonReviewPage()
-            ? "amazon review context"
+          : amazon
+            ? isAmazonReviewPage() ? "amazon review context" : "amazon product context"
             : bestSource.extractor || "selectors",
     comments: xConversation
       ? xConversation.comments

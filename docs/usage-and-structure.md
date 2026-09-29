@@ -208,6 +208,8 @@ Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/` 리뷰 화�
 
 Amazon 화면의 `global ratings` 수치는 별점만 남긴 사용자까지 포함할 수 있으므로 서면 리뷰 개수와 같지 않습니다. 결과에는 Amazon이 표시한 평점 수와 실제로 수집한 1~3점 서면 리뷰 수를 별도로 기록합니다. 리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 상품과 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
 
+각 리뷰는 review ID, 별점, 작성자, 날짜, 구매 인증, 옵션, 제목, 전체 본문, 도움 수를 구분해 저장합니다. 구매 인증 배지나 옵션 문구를 리뷰 본문으로 취급하지 않습니다. 상품 페이지의 일반 본문은 제품명, 요약, 특징, 사양, 제품 설명, 중요 정보만 수집해 내비게이션, 추천 상품, 광고 문구를 제외합니다. `amazon.com`과 `amazon.co.jp`를 모두 지원합니다.
+
 ## 저장 위치
 
 요약 결과는 두 군데에 저장됩니다.
@@ -238,7 +240,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.42.xpi
+dist\local-page-summarizer-0.3.43.xpi
 ```
 
 ## 개발 검증
