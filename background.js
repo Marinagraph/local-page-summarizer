@@ -65,14 +65,49 @@ async function setJobState(partial) {
   return next;
 }
 
+function isMissingReceiver(error) {
+  return /receiving end does not exist|could not establish connection|message port closed/i.test(String(error?.message || error));
+}
+
 async function collectPageFromTab(tabId) {
-  try {
-    return await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
-  } catch (error) {
-    await browser.tabs.executeScript(tabId, { file: "vendor/defuddle.js" }).catch(() => {});
-    await browser.tabs.executeScript(tabId, { file: "contentScript.js" });
-    return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
+  let stage = "탭 확인";
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      stage = "탭 확인";
+      const tab = await browser.tabs.get(tabId);
+      if (!/^https?:\/\//i.test(tab.url || "")) {
+        throw new Error("일반 웹페이지를 연 뒤 실행해 주세요.");
+      }
+      if (tab.status === "loading") await waitForTabComplete(tabId);
+      stage = "수집기 준비 확인";
+      let ready;
+      try {
+        ready = await browser.tabs.sendMessage(tabId, { type: "SUMMARIZER_READY" }, { frameId: 0 });
+      } catch (error) {
+        if (!isMissingReceiver(error)) throw error;
+      }
+      if (!ready?.ready || ready.version !== extensionVersion()) {
+        stage = "수집기 주입";
+        await browser.tabs.executeScript(tabId, { file: "vendor/defuddle.js", frameId: 0 }).catch(() => {});
+        await browser.tabs.executeScript(tabId, { file: "contentScript.js", frameId: 0 });
+        stage = "주입 후 연결 확인";
+        ready = await browser.tabs.sendMessage(tabId, { type: "SUMMARIZER_READY" }, { frameId: 0 });
+        if (!ready?.ready || ready.version !== extensionVersion()) {
+          throw new Error("Receiving end does not exist: 수집기 준비 응답 없음");
+        }
+      }
+      stage = "페이지 수집";
+      const page = await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" }, { frameId: 0 });
+      if (!page || typeof page.url !== "string") throw new Error("수집 결과가 비어 있습니다.");
+      return page;
+    } catch (error) {
+      lastError = error;
+      if (!isMissingReceiver(error) || attempt === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
   }
+  throw new Error(`[${extensionVersion()} / ${stage} / 탭 ${tabId}] ${lastError?.message || lastError}`);
 }
 
 function isAmazonHostname(hostname) {

@@ -2004,6 +2004,9 @@ if (globalThis.__localPageSummarizerMessageListener) {
 }
 
 globalThis.__localPageSummarizerMessageListener = (message) => {
+  if (message && message.type === "SUMMARIZER_READY") {
+    return Promise.resolve({ ready: true, version: browser.runtime.getManifest().version });
+  }
   if (message && message.type === "COLLECT_PAGE") {
     return globalThis.__localPageSummarizerCollectPage();
   }

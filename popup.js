@@ -394,10 +394,15 @@ async function startSummaryJob() {
   };
 
   renderJobState(state);
-  const response = await browser.runtime.sendMessage({
-    type: "START_SUMMARY_JOB",
-    request
-  });
+  let response;
+  try {
+    response = await browser.runtime.sendMessage({
+      type: "START_SUMMARY_JOB",
+      request
+    });
+  } catch (error) {
+    throw new Error(`[${browser.runtime.getManifest().version} / 팝업 → 백그라운드 연결] ${error.message || error}`);
+  }
 
   if (response && response.state) {
     renderJobState(response.state);
