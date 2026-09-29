@@ -238,7 +238,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.41.xpi
+dist\local-page-summarizer-0.3.42.xpi
 ```
 
 ## 개발 검증

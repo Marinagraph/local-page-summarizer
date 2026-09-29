@@ -1,3 +1,6 @@
+(() => {
+"use strict";
+
 function cleanText(text) {
   return text
     .replace(/\r/g, "")
@@ -1878,12 +1881,21 @@ async function collectPage() {
   };
 }
 
-startXConversationObserver();
+globalThis.__localPageSummarizerCollectPage = collectPage;
 
-browser.runtime.onMessage.addListener((message) => {
-  if (message && message.type === "COLLECT_PAGE") {
-    return collectPage();
-  }
+if (!globalThis.__localPageSummarizerMessageListenerInstalled) {
+  globalThis.__localPageSummarizerMessageListenerInstalled = true;
+  browser.runtime.onMessage.addListener((message) => {
+    if (message && message.type === "COLLECT_PAGE") {
+      return globalThis.__localPageSummarizerCollectPage();
+    }
 
-  return false;
-});
+    return false;
+  });
+}
+
+if (!globalThis.__localPageSummarizerXObserverInstalled) {
+  globalThis.__localPageSummarizerXObserverInstalled = true;
+  startXConversationObserver();
+}
+})();
