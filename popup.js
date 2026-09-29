@@ -185,6 +185,14 @@ function toMarkdown(saved) {
       `- X status ID: ${saved.xCollection.statusId}`,
       `- X loaded replies: ${saved.xCollection.loadedReplyCount}`
     ] : []),
+    ...(saved.amazonCollection ? [
+      `- Amazon ASIN: ${saved.amazonCollection.asin}`,
+      `- Amazon 1-star reviews: ${saved.amazonCollection.starCounts?.[1] || 0}`,
+      `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
+      `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
+      `- Amazon low-star reviews: ${saved.amazonCollection.reviewCount}`,
+      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`
+    ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`
     ] : []),

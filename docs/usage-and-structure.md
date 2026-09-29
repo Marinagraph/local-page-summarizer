@@ -201,6 +201,12 @@ https://image.dcinside.com/viewimagePop.php?...
 
 디시 이미지는 background script가 억지로 fetch하지 않고 OCR 서버에 URL을 넘깁니다. OCR 서버는 원래 페이지 URL을 `Referer`로 붙여 이미지를 가져옵니다.
 
+## Amazon 1~3점 리뷰 수집
+
+Amazon의 `/portal/customer-reviews/ASIN/` 리뷰 화면에서 실행하면 현재 별점의 `Show 10 more reviews` 버튼을 더 이상 리뷰가 늘지 않을 때까지 자동으로 누릅니다. 이어서 빠진 1점, 2점, 3점 필터를 비활성 임시 탭에서 순차적으로 열어 같은 방식으로 수집하고, 수집이 끝난 탭은 즉시 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
+
+리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다.
+
 ## 저장 위치
 
 요약 결과는 두 군데에 저장됩니다.
@@ -216,7 +222,7 @@ C:\Users\objectives\Downloads\Local Page Summarizer\페이지 제목.md
 
 Popup의 `Export Markdown`은 가장 최근 저장 결과를 다시 Markdown으로 내보냅니다.
 
-Markdown의 `Source Text`에는 페이지 본문 다음에 수집된 댓글과 리뷰가 번호가 붙은 개별 항목으로 모두 저장됩니다. Kakaku와 Danawa처럼 background에서 페이지네이션으로 추가 수집한 원소도 동일하게 포함되므로, 후속 Markdown/JSON 변환 작업에서 요약문뿐 아니라 실제 분석 원문을 다시 사용할 수 있습니다.
+Markdown의 `Source Text`에는 페이지 본문 다음에 수집된 댓글과 리뷰가 번호가 붙은 개별 항목으로 모두 저장됩니다. Amazon 1~3점 리뷰와 Kakaku 및 Danawa처럼 background에서 추가 수집한 원소도 동일하게 포함되므로, 후속 Markdown/JSON 변환 작업에서 요약문뿐 아니라 실제 분석 원문을 다시 사용할 수 있습니다.
 
 ## XPI 빌드
 
@@ -231,7 +237,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.38.xpi
+dist\local-page-summarizer-0.3.39.xpi
 ```
 
 ## 개발 검증
@@ -290,6 +296,6 @@ git diff --check
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
-- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오고, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, Amazon 리뷰 포털은 1~3점 필터의 `Show 10 more reviews`를 끝까지 확장하고, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오며, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
 - 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.

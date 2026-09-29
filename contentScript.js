@@ -40,6 +40,217 @@ function isKakakuBbsPage() {
   return location.hostname === "bbs.kakaku.com" && /^\/bbs\/K\d+(?:\/|$)/i.test(location.pathname);
 }
 
+function isAmazonPage() {
+  return /(^|\.)amazon\.(?:com|ca|com\.mx|com\.br|co\.uk|de|fr|it|es|nl|se|pl|com\.be|co\.jp|in|com\.au|sg|ae|sa|com\.tr)$/i.test(location.hostname);
+}
+
+function isAmazonReviewPage() {
+  return isAmazonPage() && /^\/portal\/customer-reviews\/[A-Z0-9]{10}(?:\/|$)/i.test(location.pathname);
+}
+
+const AMAZON_LOW_STAR_FILTERS = ["one_star", "two_star", "three_star"];
+const AMAZON_MAX_MORE_CLICKS = 200;
+
+function amazonStarForFilter(filterName) {
+  return AMAZON_LOW_STAR_FILTERS.indexOf(String(filterName || "").toLowerCase()) + 1;
+}
+
+function collectAmazonMetadata(expansion = {}) {
+  if (!isAmazonReviewPage()) {
+    return null;
+  }
+
+  const asin = (location.pathname.match(/\/portal\/customer-reviews\/([A-Z0-9]{10})(?:\/|$)/i) || [])[1] || "";
+  const filter = new URL(location.href).searchParams.get("filterByStar") || "all_stars";
+  const reviewUrls = {};
+
+  for (const [index, filterName] of AMAZON_LOW_STAR_FILTERS.entries()) {
+    const star = index + 1;
+    reviewUrls[filterName] = `${location.origin}/portal/customer-reviews/${asin}/ref=acr_dp_hist_${star}` +
+      `?ie=UTF8&reviewerType=all_reviews&filterByStar=${filterName}#reviews-filter-bar`;
+  }
+
+  return {
+    asin,
+    filter,
+    currentStar: amazonStarForFilter(filter),
+    reviewUrls,
+    moreClicks: Number(expansion.moreClicks) || 0,
+    expansionStoppedAtLimit: Boolean(expansion.stoppedAtLimit)
+  };
+}
+
+function amazonReviewCards() {
+  const selectors = [
+    "[data-hook='review']",
+    "[data-hook='cr-review-card']",
+    "[id^='customer_review-']"
+  ].join(",");
+  const cards = [];
+  const seen = new Set();
+
+  for (const card of document.querySelectorAll(selectors)) {
+    const parentCard = card.parentElement?.closest(selectors);
+    if (parentCard || seen.has(card)) {
+      continue;
+    }
+    seen.add(card);
+    cards.push(card);
+  }
+
+  return cards;
+}
+
+function amazonRatingFromCard(card) {
+  const ratingElement = card.querySelector([
+    "[data-hook='review-star-rating']",
+    "[data-hook='cmps-review-star-rating']",
+    "[data-hook='review-star-rating-view-point']",
+    ".review-rating",
+    "i[class*='a-star']"
+  ].join(","));
+  const value = cleanText([
+    ratingElement?.getAttribute("aria-label") || "",
+    ratingElement?.getAttribute("title") || "",
+    ratingElement?.textContent || ""
+  ].join(" "));
+  const match = value.match(/(?:^|\s)([1-5](?:\.0)?)\s*(?:out of 5|of 5|stars?|별|von 5|sur 5|su 5|de 5)?/i);
+  return match ? Math.round(Number(match[1])) : 0;
+}
+
+function amazonReviewField(card, selector) {
+  return getElementText(card.querySelector(selector));
+}
+
+function collectAmazonReviews() {
+  if (!isAmazonReviewPage()) {
+    return { comments: [], starCounts: {}, cardCount: 0 };
+  }
+
+  const comments = [];
+  const seen = new Set();
+  const starCounts = { 1: 0, 2: 0, 3: 0 };
+  const cards = amazonReviewCards();
+
+  for (const card of cards) {
+    const rating = amazonRatingFromCard(card);
+    if (rating < 1 || rating > 3) {
+      continue;
+    }
+
+    const reviewId = cleanText(
+      card.getAttribute("data-review-id") ||
+      card.id.replace(/^customer_review-/, "") ||
+      ""
+    );
+    const title = amazonReviewField(card, "[data-hook='review-title'], .review-title")
+      .replace(/^\s*[1-5](?:\.0)?\s*(?:out of 5|of 5)?\s*stars?\s*/i, "")
+      .trim();
+    const body = amazonReviewField(card, "[data-hook='review-body'], .review-text, .review-data");
+    if (!body) {
+      continue;
+    }
+
+    const author = amazonReviewField(card, ".a-profile-name, [data-hook='review-author']");
+    const date = amazonReviewField(card, "[data-hook='review-date'], .review-date");
+    const verified = amazonReviewField(card, "[data-hook='avp-badge'], [data-hook='avp-badge-linkless']");
+    const variant = amazonReviewField(card, "[data-hook='format-strip'], [data-hook='format-strip-linkless']");
+    const helpful = amazonReviewField(card, "[data-hook='helpful-vote-statement']");
+    const key = reviewId || `${rating}:${author}:${date}:${body}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    starCounts[rating] += 1;
+    comments.push(cleanText([
+      `[Amazon review | ${rating}/5${reviewId ? ` | ${reviewId}` : ""}]`,
+      [author, date, verified, variant, helpful].filter(Boolean).join(" | "),
+      title,
+      body
+    ].filter(Boolean).join("\n")));
+  }
+
+  return { comments, starCounts, cardCount: cards.length };
+}
+
+function findAmazonMoreReviewsButton() {
+  const candidates = document.querySelectorAll([
+    "button[data-hook*='more-reviews' i]",
+    "a[data-hook*='more-reviews' i]",
+    "button[id*='more-reviews' i]",
+    "a[id*='more-reviews' i]",
+    "button",
+    "a[role='button']"
+  ].join(","));
+
+  for (const candidate of candidates) {
+    const text = cleanText(candidate.textContent || candidate.getAttribute("aria-label") || "");
+    const isMoreReviews = /\b(?:show|see|load)\s+(?:\d+\s+)?more\s+reviews?\b/i.test(text);
+    const disabled = candidate.disabled || candidate.getAttribute("aria-disabled") === "true";
+    if (isMoreReviews && !disabled && isRenderedElement(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function waitForAmazonReviewGrowth(previousCount, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const currentCount = amazonReviewCards().length;
+      if (currentCount > previousCount) {
+        clearInterval(timer);
+        resolve(true);
+        return;
+      }
+      if (Date.now() - started >= timeoutMs) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 250);
+  });
+}
+
+async function reportAmazonCollectionProgress(message) {
+  try {
+    await browser.runtime.sendMessage({ type: "COLLECTION_PROGRESS", message });
+  } catch {
+    // The background page may be restarting; collection can continue without UI progress.
+  }
+}
+
+async function expandAmazonReviews() {
+  let moreClicks = 0;
+
+  while (moreClicks < AMAZON_MAX_MORE_CLICKS) {
+    const button = findAmazonMoreReviewsButton();
+    if (!button) {
+      break;
+    }
+
+    const previousCount = amazonReviewCards().length;
+    button.scrollIntoView({ block: "center", behavior: "auto" });
+    button.click();
+    const grew = await waitForAmazonReviewGrowth(previousCount);
+    if (!grew) {
+      break;
+    }
+
+    moreClicks += 1;
+    await reportAmazonCollectionProgress(
+      `Amazon ${collectAmazonMetadata()?.currentStar || "1~3"}점 리뷰 펼치는 중: ${amazonReviewCards().length.toLocaleString()}개`
+    );
+  }
+
+  return {
+    moreClicks,
+    stoppedAtLimit: moreClicks >= AMAZON_MAX_MORE_CLICKS && Boolean(findAmazonMoreReviewsButton())
+  };
+}
+
 function getDanawaInlineScriptText() {
   return Array.from(document.scripts)
     .filter((script) => !script.src)
@@ -1087,6 +1298,10 @@ function collectLikelyComments(pageText) {
     return collectKakakuBbsPosts();
   }
 
+  if (isAmazonReviewPage()) {
+    return collectAmazonReviews().comments;
+  }
+
   const selectors = [
     "[data-testid*='comment' i]",
     "[class*='comment' i]",
@@ -1538,8 +1753,11 @@ function collectYouTubeTranscript() {
   return { text, segments };
 }
 
-function collectPage() {
+async function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
+  const amazonExpansion = isAmazonReviewPage() ? await expandAmazonReviews() : null;
+  const amazonReviews = isAmazonReviewPage() ? collectAmazonReviews() : null;
+  const amazon = collectAmazonMetadata(amazonExpansion || {});
   const xConversation = collectXConversation();
   const kakaku = collectKakakuMetadata();
   const kakakuBbs = collectKakakuBbsMetadata();
@@ -1549,7 +1767,15 @@ function collectPage() {
     : kakakuBbs
       ? collectKakakuBbsPageContext()
       : "";
-  const dedicatedText = xConversation?.text || kakakuContext;
+  const amazonContext = amazon
+    ? cleanText([
+      getElementText(document.querySelector("h1")),
+      getMetaDescription(),
+      `Amazon ASIN: ${amazon.asin}`,
+      `Amazon review filter: ${amazon.filter}`
+    ].filter(Boolean).join("\n"))
+    : "";
+  const dedicatedText = xConversation?.text || kakakuContext || amazonContext;
   const bestSource = dedicatedText
     ? { text: "", element: null, extractor: "selectors" }
     : getBestTextSource({ useDefuddle: !selection });
@@ -1563,8 +1789,10 @@ function collectPage() {
       ? Array.from(document.querySelectorAll(".reviewBox"))
       : kakakuBbs
         ? Array.from(document.querySelectorAll(".bbsArea .box06"))
-        : null;
-  const strictImageRoots = Boolean(xConversation || kakaku || kakakuBbs);
+        : amazon
+          ? amazonReviewCards()
+          : null;
+  const strictImageRoots = Boolean(xConversation || kakaku || kakakuBbs || amazon);
 
   return {
     title: document.title || location.href,
@@ -1577,8 +1805,14 @@ function collectPage() {
         ? "x conversation"
         : (kakaku || kakakuBbs)
           ? "kakaku product context"
-          : bestSource.extractor || "selectors",
-    comments: xConversation ? xConversation.comments : collectLikelyComments(text),
+          : amazon
+            ? "amazon review context"
+            : bestSource.extractor || "selectors",
+    comments: xConversation
+      ? xConversation.comments
+      : amazonReviews
+        ? amazonReviews.comments
+        : collectLikelyComments(text),
     images: isYouTubePage()
       ? []
       : collectImageCandidates(siteImageRoots || bestSource.element, { strictRoots: strictImageRoots }),
@@ -1586,6 +1820,14 @@ function collectPage() {
     danawa,
     kakaku,
     kakakuBbs,
+    amazon: amazon
+      ? {
+        ...amazon,
+        cardCount: amazonReviews.cardCount,
+        reviewCount: amazonReviews.comments.length,
+        starCounts: amazonReviews.starCounts
+      }
+      : null,
     xCollection: xConversation?.metadata || null,
     selectedOnly: Boolean(selection),
     collectedAt: new Date().toISOString()
@@ -1596,7 +1838,7 @@ startXConversationObserver();
 
 browser.runtime.onMessage.addListener((message) => {
   if (message && message.type === "COLLECT_PAGE") {
-    return Promise.resolve(collectPage());
+    return collectPage();
   }
 
   return false;

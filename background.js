@@ -22,6 +22,8 @@ const DANAWA_MAX_PAGES = 100;
 const DANAWA_FETCH_RETRIES = 3;
 const KAKAKU_MAX_PAGES = 100;
 const KAKAKU_FETCH_RETRIES = 3;
+const AMAZON_REVIEW_TAB_TIMEOUT_MS = 45000;
+const AMAZON_LOW_STAR_FILTERS = ["one_star", "two_star", "three_star"];
 
 let activeJob = null;
 let activeAbortController = null;
@@ -59,6 +61,161 @@ async function collectPageFromTab(tabId) {
     await browser.tabs.executeScript(tabId, { file: "contentScript.js" });
     return browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" });
   }
+}
+
+function isAmazonHostname(hostname) {
+  return /(^|\.)amazon\.(?:com|ca|com\.mx|com\.br|co\.uk|de|fr|it|es|nl|se|pl|com\.be|co\.jp|in|com\.au|sg|ae|sa|com\.tr)$/i.test(String(hostname || ""));
+}
+
+function isAmazonReviewCollection(page) {
+  if (!page || !page.amazon || !/^[A-Z0-9]{10}$/i.test(String(page.amazon.asin || ""))) {
+    return false;
+  }
+
+  try {
+    const url = new URL(page.url);
+    return isAmazonHostname(url.hostname) && /^\/portal\/customer-reviews\//i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function amazonReviewUrl(page, filterName) {
+  const source = new URL(page.url);
+  const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
+  return `${source.origin}/portal/customer-reviews/${page.amazon.asin}/ref=acr_dp_hist_${star}` +
+    `?ie=UTF8&reviewerType=all_reviews&filterByStar=${filterName}#reviews-filter-bar`;
+}
+
+function waitForTabComplete(tabId, signal) {
+  return new Promise((resolve, reject) => {
+    let timeoutId = null;
+    let settled = false;
+
+    function cleanup() {
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    }
+
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    }
+
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        finish();
+      }
+    }
+
+    function onAbort() {
+      finish(new Error("Amazon review collection was cancelled."));
+    }
+
+    browser.tabs.onUpdated.addListener(onUpdated);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    timeoutId = setTimeout(() => finish(new Error("Amazon review page load timed out.")), AMAZON_REVIEW_TAB_TIMEOUT_MS);
+
+    if (signal && signal.aborted) {
+      finish(new Error("Amazon review collection was cancelled."));
+      return;
+    }
+
+    browser.tabs.get(tabId).then((tab) => {
+      if (tab && tab.status === "complete") finish();
+    }).catch((error) => finish(error));
+  });
+}
+
+async function collectAmazonStarPage(page, filterName, signal, onProgress) {
+  const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
+  let tabId = null;
+
+  try {
+    if (onProgress) {
+      await onProgress(`Amazon ${star}점 리뷰 페이지 여는 중...`);
+    }
+    const tab = await browser.tabs.create({
+      url: amazonReviewUrl(page, filterName),
+      active: false
+    });
+    tabId = tab.id;
+    await waitForTabComplete(tabId, signal);
+    const collected = await collectPageFromTab(tabId);
+    if (!isAmazonReviewCollection(collected) || Number(collected.amazon.currentStar) !== star) {
+      throw new Error(`Amazon ${star}점 리뷰 페이지를 열지 못했습니다. Amazon 로그인 상태를 확인하세요.`);
+    }
+    if (collected.amazon.expansionStoppedAtLimit) {
+      throw new Error(`Amazon ${star}점 리뷰가 안전 한도보다 많아 전체 수집을 완료하지 못했습니다.`);
+    }
+    if (onProgress) {
+      await onProgress(`Amazon ${star}점 리뷰 수집 완료: ${collected.comments.length.toLocaleString()}개`);
+    }
+    return collected;
+  } finally {
+    if (tabId !== null) {
+      await browser.tabs.remove(tabId).catch(() => {});
+    }
+  }
+}
+
+async function enrichPageWithAmazonReviews(page, signal, onProgress) {
+  if (!isAmazonReviewCollection(page)) {
+    return page;
+  }
+  if (page.amazon.expansionStoppedAtLimit) {
+    throw new Error("Amazon 리뷰가 안전 한도보다 많아 현재 별점의 전체 수집을 완료하지 못했습니다.");
+  }
+
+  const collectedPages = [page];
+  const currentStar = Number(page.amazon.currentStar) || 0;
+  const currentFilterCoversAllLowStars = String(page.amazon.filter || "").toLowerCase() === "critical";
+
+  for (const filterName of currentFilterCoversAllLowStars ? [] : AMAZON_LOW_STAR_FILTERS) {
+    const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
+    if (star === currentStar) {
+      continue;
+    }
+    if (signal && signal.aborted) {
+      throw new Error("Amazon review collection was cancelled.");
+    }
+    collectedPages.push(await collectAmazonStarPage(page, filterName, signal, onProgress));
+  }
+
+  const comments = [];
+  const seen = new Set();
+  const starCounts = { 1: 0, 2: 0, 3: 0 };
+  let moreClicks = 0;
+
+  for (const collected of collectedPages) {
+    moreClicks += Number(collected.amazon?.moreClicks) || 0;
+    for (const comment of collected.comments || []) {
+      const normalized = String(comment || "").trim();
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized);
+        comments.push(normalized);
+        const rating = Number((normalized.match(/^\[Amazon review \| ([1-3])\/5/m) || [])[1]) || 0;
+        if (rating) starCounts[rating] += 1;
+      }
+    }
+  }
+
+  return {
+    ...page,
+    comments,
+    amazonCollection: {
+      asin: page.amazon.asin,
+      reviewCount: comments.length,
+      starCounts,
+      filtersCollected: AMAZON_LOW_STAR_FILTERS,
+      moreClicks,
+      tabsOpened: collectedPages.length - 1
+    }
+  };
 }
 
 function normalizeDanawaText(value) {
@@ -2285,6 +2442,14 @@ function toMarkdown(saved) {
       `- X status ID: ${saved.xCollection.statusId}`,
       `- X loaded replies: ${saved.xCollection.loadedReplyCount}`
     ] : []),
+    ...(saved.amazonCollection ? [
+      `- Amazon ASIN: ${saved.amazonCollection.asin}`,
+      `- Amazon 1-star reviews: ${saved.amazonCollection.starCounts?.[1] || 0}`,
+      `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
+      `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
+      `- Amazon low-star reviews: ${saved.amazonCollection.reviewCount}`,
+      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`
+    ] : []),
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,
     ...(saved.ocrTiming ? [
@@ -2333,6 +2498,14 @@ async function runSummaryJob(request) {
 
   try {
     let page = await collectPageFromTab(request.tabId);
+    if (isAmazonReviewCollection(page)) {
+      await setJobState({ message: "Amazon 1~3점 리뷰 전체 수집 중..." });
+      page = await enrichPageWithAmazonReviews(
+        page,
+        signal,
+        (message) => setJobState({ message })
+      );
+    }
     if (isDanawaProductCollection(page)) {
       await setJobState({ message: "다나와 전체 상품의견과 쇼핑몰 후기 수집 중..." });
       page = await enrichPageWithDanawaComments(
@@ -2416,6 +2589,10 @@ async function runSummaryJob(request) {
 
 browser.runtime.onMessage.addListener((message) => {
   if (!message || message.type !== "START_SUMMARY_JOB") {
+    if (message && message.type === "COLLECTION_PROGRESS" && activeJob) {
+      return setJobState({ message: String(message.message || "페이지 수집 중...") })
+        .then(() => ({ ok: true }));
+    }
     if (message && message.type === "RESET_SUMMARY_JOB") {
       if (activeAbortController) {
         activeAbortController.abort();
