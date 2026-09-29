@@ -75,11 +75,16 @@ async function collectPageFromTab(tabId) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       stage = "탭 확인";
-      const tab = await browser.tabs.get(tabId);
-      if (!/^https?:\/\//i.test(tab.url || "")) {
-        throw new Error("일반 웹페이지를 연 뒤 실행해 주세요.");
+      let tab = await browser.tabs.get(tabId);
+      if (tab.status === "loading" || tab.url === "about:blank" || tab.pendingUrl) {
+        stage = "웹페이지 로딩 대기";
+        await waitForTabComplete(tabId);
+        tab = await browser.tabs.get(tabId);
       }
-      if (tab.status === "loading") await waitForTabComplete(tabId);
+      // Missing tab metadata is not evidence of a restricted page.
+      if (tab.url && !/^https?:\/\//i.test(tab.url)) {
+        throw new Error(`수집할 수 없는 탭 주소: ${tab.url}`);
+      }
       stage = "수집기 준비 확인";
       let ready;
       try {
@@ -100,6 +105,7 @@ async function collectPageFromTab(tabId) {
       stage = "페이지 수집";
       const page = await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" }, { frameId: 0 });
       if (!page || typeof page.url !== "string") throw new Error("수집 결과가 비어 있습니다.");
+      if (!/^https?:\/\//i.test(page.url)) throw new Error(`수집할 수 없는 페이지 주소: ${page.url}`);
       return page;
     } catch (error) {
       lastError = error;
@@ -143,11 +149,13 @@ function amazonReviewUrl(page, filterName) {
 function waitForTabComplete(tabId, signal) {
   return new Promise((resolve, reject) => {
     let timeoutId = null;
+    let pollId = null;
     let settled = false;
 
     function cleanup() {
       browser.tabs.onUpdated.removeListener(onUpdated);
       if (timeoutId) clearTimeout(timeoutId);
+      if (pollId) clearTimeout(pollId);
       if (signal) signal.removeEventListener("abort", onAbort);
     }
 
@@ -161,7 +169,23 @@ function waitForTabComplete(tabId, signal) {
 
     function onUpdated(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
-        finish();
+        checkTab();
+      }
+    }
+
+    async function checkTab() {
+      if (settled) return;
+      if (pollId) clearTimeout(pollId);
+      try {
+        const tab = await browser.tabs.get(tabId);
+        if (settled) return;
+        if (tab.status === "complete" && tab.url !== "about:blank" && !tab.pendingUrl) {
+          finish();
+        } else {
+          pollId = setTimeout(checkTab, 200);
+        }
+      } catch (error) {
+        finish(error);
       }
     }
 
@@ -178,13 +202,11 @@ function waitForTabComplete(tabId, signal) {
       return;
     }
 
-    browser.tabs.get(tabId).then((tab) => {
-      if (tab && tab.status === "complete") finish();
-    }).catch((error) => finish(error));
+    checkTab();
   });
 }
 
-async function collectAmazonStarPage(page, filterName, signal, onProgress) {
+async function collectAmazonStarPage(page, filterName, signal, onProgress, sourceTabId) {
   const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
   let tabId = null;
 
@@ -192,9 +214,12 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress) {
     if (onProgress) {
       await onProgress(`Amazon ${star}점 리뷰 페이지 여는 중...`);
     }
+    const sourceTab = sourceTabId == null ? null : await browser.tabs.get(sourceTabId);
     const tab = await browser.tabs.create({
       url: amazonReviewUrl(page, filterName),
-      active: false
+      active: false,
+      ...(sourceTab?.cookieStoreId ? { cookieStoreId: sourceTab.cookieStoreId } : {}),
+      ...(sourceTab?.windowId != null ? { windowId: sourceTab.windowId } : {})
     });
     tabId = tab.id;
     await waitForTabComplete(tabId, signal);
@@ -202,6 +227,7 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress) {
     if (
       !isAmazonReviewCollection(collected) ||
       collected.amazon.pageType !== "review" ||
+      collected.amazon.asin.toUpperCase() !== page.amazon.asin.toUpperCase() ||
       Number(collected.amazon.currentStar) !== star
     ) {
       throw new Error(`Amazon ${star}점 리뷰 페이지를 열지 못했습니다. Amazon 로그인 상태를 확인하세요.`);
@@ -220,7 +246,7 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress) {
   }
 }
 
-async function enrichPageWithAmazonReviews(page, signal, onProgress) {
+async function enrichPageWithAmazonReviews(page, signal, onProgress, sourceTabId) {
   if (!isAmazonReviewCollection(page)) {
     return page;
   }
@@ -239,7 +265,7 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
     if (signal && signal.aborted) {
       throw new Error("Amazon review collection was cancelled.");
     }
-    collectedPages.push(await collectAmazonStarPage(page, filterName, signal, onProgress));
+    collectedPages.push(await collectAmazonStarPage(page, filterName, signal, onProgress, sourceTabId));
   }
 
   const comments = [];
@@ -2591,7 +2617,8 @@ async function runSummaryJob(request) {
       page = await enrichPageWithAmazonReviews(
         page,
         signal,
-        (message) => setJobState({ message })
+        (message) => setJobState({ message }),
+        request.tabId
       );
     }
     if (isDanawaProductCollection(page)) {
