@@ -120,6 +120,12 @@ function isAmazonHostname(hostname) {
   return /(^|\.)amazon\.(?:com|ca|com\.mx|com\.br|co\.uk|de|fr|it|es|nl|se|pl|com\.be|co\.jp|in|com\.au|sg|ae|sa|com\.tr)$/i.test(String(hostname || ""));
 }
 
+function amazonReviewPathMatch(pathname) {
+  return String(pathname || "").match(
+    /(?:^|\/)(?:portal\/customer-reviews|product-reviews)\/([A-Z0-9]{10})(?:\/|$)/i
+  );
+}
+
 function isAmazonReviewCollection(page) {
   if (!page || !page.amazon || !/^[A-Z0-9]{10}$/i.test(String(page.amazon.asin || ""))) {
     return false;
@@ -128,7 +134,7 @@ function isAmazonReviewCollection(page) {
   try {
     const url = new URL(page.url);
     return isAmazonHostname(url.hostname) && (
-      /(?:^|\/)(?:portal\/customer-reviews|product-reviews)\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname) ||
+      amazonReviewPathMatch(url.pathname) ||
       /(?:^|\/)dp\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname)
     );
   } catch {
