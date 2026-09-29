@@ -86,7 +86,10 @@ function isAmazonReviewCollection(page) {
 
   try {
     const url = new URL(page.url);
-    return isAmazonHostname(url.hostname) && /^\/portal\/customer-reviews\//i.test(url.pathname);
+    return isAmazonHostname(url.hostname) && (
+      /(?:^|\/)portal\/customer-reviews\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname) ||
+      /(?:^|\/)dp\/[A-Z0-9]{10}(?:\/|$)/i.test(url.pathname)
+    );
   } catch {
     return false;
   }
@@ -95,7 +98,10 @@ function isAmazonReviewCollection(page) {
 function amazonReviewUrl(page, filterName) {
   const source = new URL(page.url);
   const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
-  return `${source.origin}/portal/customer-reviews/${page.amazon.asin}/ref=acr_dp_hist_${star}` +
+  const localePrefix = /^\/-\/[^/]+$/i.test(String(page.amazon.localePrefix || ""))
+    ? page.amazon.localePrefix
+    : "";
+  return `${source.origin}${localePrefix}/portal/customer-reviews/${page.amazon.asin}/ref=acr_dp_hist_${star}` +
     `?ie=UTF8&reviewerType=all_reviews&filterByStar=${filterName}#reviews-filter-bar`;
 }
 
@@ -158,7 +164,11 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress) {
     tabId = tab.id;
     await waitForTabComplete(tabId, signal);
     const collected = await collectPageFromTab(tabId);
-    if (!isAmazonReviewCollection(collected) || Number(collected.amazon.currentStar) !== star) {
+    if (
+      !isAmazonReviewCollection(collected) ||
+      collected.amazon.pageType !== "review" ||
+      Number(collected.amazon.currentStar) !== star
+    ) {
       throw new Error(`Amazon ${star}점 리뷰 페이지를 열지 못했습니다. Amazon 로그인 상태를 확인하세요.`);
     }
     if (collected.amazon.expansionStoppedAtLimit) {
@@ -185,9 +195,8 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
 
   const collectedPages = [page];
   const currentStar = Number(page.amazon.currentStar) || 0;
-  const currentFilterCoversAllLowStars = String(page.amazon.filter || "").toLowerCase() === "critical";
 
-  for (const filterName of currentFilterCoversAllLowStars ? [] : AMAZON_LOW_STAR_FILTERS) {
+  for (const filterName of AMAZON_LOW_STAR_FILTERS) {
     const star = AMAZON_LOW_STAR_FILTERS.indexOf(filterName) + 1;
     if (star === currentStar) {
       continue;
@@ -207,8 +216,10 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
     moreClicks += Number(collected.amazon?.moreClicks) || 0;
     for (const comment of collected.comments || []) {
       const normalized = String(comment || "").trim();
-      if (normalized && !seen.has(normalized)) {
-        seen.add(normalized);
+      const reviewId = (normalized.match(/^\[Amazon review \| [1-3]\/5 \| ([^\]]+)\]/m) || [])[1] || "";
+      const dedupeKey = reviewId ? `review:${reviewId}` : normalized;
+      if (normalized && !seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
         comments.push(normalized);
         const rating = Number((normalized.match(/^\[Amazon review \| ([1-3])\/5/m) || [])[1]) || 0;
         if (rating) starCounts[rating] += 1;
@@ -221,6 +232,7 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
     comments,
     amazonCollection: {
       asin: page.amazon.asin,
+      reportedRatings: Number(page.amazon.reportedRatings) || 0,
       reviewCount: comments.length,
       starCounts,
       filtersCollected: AMAZON_LOW_STAR_FILTERS,
@@ -1137,6 +1149,12 @@ function pageContext(page) {
     page.xCollection
       ? `X 현재 대화 수집: 답글 ${page.xCollection.loadedReplyCount.toLocaleString()}개`
       : "",
+    page.amazonCollection
+      ? `Amazon 저평점 서면 리뷰: 1점 ${page.amazonCollection.starCounts?.[1] || 0}개, 2점 ${page.amazonCollection.starCounts?.[2] || 0}개, 3점 ${page.amazonCollection.starCounts?.[3] || 0}개 (합계 ${page.amazonCollection.reviewCount.toLocaleString()}개)`
+      : "",
+    page.amazonCollection?.reportedRatings
+      ? `Amazon 표시 평점 수: ${page.amazonCollection.reportedRatings.toLocaleString()}개 (서면 리뷰 수와 다를 수 있음)`
+      : "",
     `이미지 후보: ${(page.images || []).length.toLocaleString()}개`,
     `OCR 결과: ${(page.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     `YouTube transcript: ${page.transcript && page.transcript.text ? "있음" : "없음"}`
@@ -1162,6 +1180,7 @@ function buildAnalysisSections(page, maxChars) {
   }
 
   if (Array.isArray(page.comments) && page.comments.length) {
+    const amazonReviews = Boolean(page.amazonCollection);
     const commentEntries = page.comments.map((comment, index) => (
       `${index + 1}. ${String(comment || "").trim()}`
     ));
@@ -1170,12 +1189,16 @@ function buildAnalysisSections(page, maxChars) {
       sections.push({
         key: "comments",
         title: "댓글",
+        amazonReviews,
         instruction: [
           "댓글 후보에서 반복되는 반응, 논쟁점, 신뢰할 만한 지적, 감정적 반응을 구분한다.",
           "대표적인 댓글 흐름과 반대 의견을 모두 포함한다.",
           "눈여겨볼 댓글은 원문 핵심 문장만 짧게 인용한다.",
           "의미 있는 댓글이 있으면 최소 3개 이상 짧게 인용한다.",
-          "의미 없는 짧은 반응, 중복, 광고성 문구는 제외한다."
+          "의미 없는 짧은 반응, 중복, 광고성 문구는 제외한다.",
+          amazonReviews
+            ? "Amazon 저평점 리뷰에서는 반복되는 결함, 내구성, 호환성, 구성품, 정품 여부, 배송·판매자·반품 문제와 사용 조건을 구분하고, 빈도와 심각도가 높은 순서로 정리한다."
+            : ""
         ].join(" "),
         chunks: commentChunks
       });
@@ -1248,7 +1271,10 @@ function sectionOutputRules(section) {
       "출력은 8줄 이내의 bullet로 제한한다.",
       "반응의 큰 흐름, 반복되는 논쟁점, 반대 의견, 눈여겨볼 댓글만 남긴다.",
       "눈여겨볼 댓글은 짧은 원문 인용 3~5개만 포함한다.",
-      "댓글을 모두 읽되, 비슷한 댓글은 묶어서 압축한다."
+      "댓글을 모두 읽되, 비슷한 댓글은 묶어서 압축한다.",
+      section.amazonReviews
+        ? "Amazon 리뷰는 제품 자체 문제와 배송·판매자 문제를 분리하고, 중요한 저평점 사례를 별점과 함께 인용한다."
+        : ""
     ];
   }
 
@@ -2464,6 +2490,7 @@ function toMarkdown(saved) {
     ] : []),
     ...(saved.amazonCollection ? [
       `- Amazon ASIN: ${saved.amazonCollection.asin}`,
+      saved.amazonCollection.reportedRatings ? `- Amazon reported ratings: ${saved.amazonCollection.reportedRatings}` : "",
       `- Amazon 1-star reviews: ${saved.amazonCollection.starCounts?.[1] || 0}`,
       `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
       `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,

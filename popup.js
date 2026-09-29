@@ -187,6 +187,7 @@ function toMarkdown(saved) {
     ] : []),
     ...(saved.amazonCollection ? [
       `- Amazon ASIN: ${saved.amazonCollection.asin}`,
+      saved.amazonCollection.reportedRatings ? `- Amazon reported ratings: ${saved.amazonCollection.reportedRatings}` : "",
       `- Amazon 1-star reviews: ${saved.amazonCollection.starCounts?.[1] || 0}`,
       `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
       `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
@@ -238,6 +239,9 @@ function renderMetaFromSaved(saved) {
       : "",
     saved.xCollection
       ? `X 답글 ${saved.xCollection.loadedReplyCount.toLocaleString()}개`
+      : "",
+    saved.amazonCollection
+      ? `Amazon 저평점 리뷰 ${saved.amazonCollection.reviewCount.toLocaleString()}개 (1점 ${saved.amazonCollection.starCounts?.[1] || 0} / 2점 ${saved.amazonCollection.starCounts?.[2] || 0} / 3점 ${saved.amazonCollection.starCounts?.[3] || 0})`
       : "",
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,

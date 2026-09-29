@@ -56,6 +56,7 @@ dist\
 `contentScript.js`
 : General page body extraction tries the bundled `vendor/defuddle.js` first, then falls back to the existing selector-based extractor if the Defuddle result is too short or suspiciously large. DCInside and YouTube keep their site-specific collectors.
 : 실제 웹페이지 안에서 실행되는 수집기입니다. 본문, 댓글 후보, 이미지 후보, YouTube transcript를 수집합니다. 디시인사이드에서는 본문과 댓글 모두 전용 DOM 수집기를 사용하며, 댓글은 실제 `ul.cmt_list.add` 댓글 목록만 수집합니다. 이미지 후보는 감지된 본문 컨테이너 안에서만 수집하고, 로고/아바타/배너/사이드바/댓글 영역 이미지는 제외합니다.
+: Amazon 상품 및 리뷰 페이지에서는 ASIN과 로케일 경로를 식별하고, 현재 페이지에 렌더링된 저평점 리뷰를 구조화합니다. 실제 1~3점 전체 수집은 background가 임시 탭으로 수행합니다.
 
 `background.js`
 : 핵심 작업자입니다. popup에서 요청을 받으면 현재 탭에서 수집한 데이터를 받아 OCR 서버와 LM Studio를 호출하고, 결과를 `browser.storage.local`에 저장한 뒤 Markdown 파일을 다운로드합니다.
@@ -203,9 +204,9 @@ https://image.dcinside.com/viewimagePop.php?...
 
 ## Amazon 1~3점 리뷰 수집
 
-Amazon의 `/portal/customer-reviews/ASIN/` 리뷰 화면에서 실행하면 현재 별점의 `Show 10 more reviews` 버튼을 더 이상 리뷰가 늘지 않을 때까지 자동으로 누릅니다. 이어서 빠진 1점, 2점, 3점 필터를 비활성 임시 탭에서 순차적으로 열어 같은 방식으로 수집하고, 수집이 끝난 탭은 즉시 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
+Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/` 리뷰 화면에서 실행할 수 있습니다. `/-/en/`처럼 언어 경로가 앞에 붙어도 그대로 유지합니다. background는 1점, 2점, 3점 필터를 비활성 임시 탭에서 각각 열고, 각 화면의 `Show 10 more reviews` 버튼을 더 이상 리뷰가 늘지 않을 때까지 자동으로 누른 뒤 탭을 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
 
-리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
+Amazon 화면의 `global ratings` 수치는 별점만 남긴 사용자까지 포함할 수 있으므로 서면 리뷰 개수와 같지 않습니다. 결과에는 Amazon이 표시한 평점 수와 실제로 수집한 1~3점 서면 리뷰 수를 별도로 기록합니다. 리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 상품과 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
 
 ## 저장 위치
 
@@ -237,7 +238,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.40.xpi
+dist\local-page-summarizer-0.3.41.xpi
 ```
 
 ## 개발 검증
@@ -296,6 +297,6 @@ git diff --check
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
-- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, Amazon 리뷰 포털은 1~3점 필터의 `Show 10 more reviews`를 끝까지 확장하고, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오며, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, Amazon 상품 및 리뷰 페이지는 1~3점 필터의 `Show 10 more reviews`를 끝까지 확장하고, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오며, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
 - 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.
