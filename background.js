@@ -69,7 +69,7 @@ function isMissingReceiver(error) {
   return /receiving end does not exist|could not establish connection|message port closed/i.test(String(error?.message || error));
 }
 
-async function collectPageFromTab(tabId) {
+async function sendMessageToPageCollector(tabId, message) {
   let stage = "탭 확인";
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -102,11 +102,13 @@ async function collectPageFromTab(tabId) {
           throw new Error("Receiving end does not exist: 수집기 준비 응답 없음");
         }
       }
-      stage = "페이지 수집";
-      const page = await browser.tabs.sendMessage(tabId, { type: "COLLECT_PAGE" }, { frameId: 0 });
-      if (!page || typeof page.url !== "string") throw new Error("수집 결과가 비어 있습니다.");
-      if (!/^https?:\/\//i.test(page.url)) throw new Error(`수집할 수 없는 페이지 주소: ${page.url}`);
-      return page;
+      stage = message.type === "COLLECT_PAGE" ? "페이지 수집" : "페이지 상태 확인";
+      const response = await browser.tabs.sendMessage(tabId, message, { frameId: 0 });
+      if (message.type === "COLLECT_PAGE") {
+        if (!response || typeof response.url !== "string") throw new Error("수집 결과가 비어 있습니다.");
+        if (!/^https?:\/\//i.test(response.url)) throw new Error(`수집할 수 없는 페이지 주소: ${response.url}`);
+      }
+      return response;
     } catch (error) {
       lastError = error;
       if (!isMissingReceiver(error) || attempt === 2) break;
@@ -114,6 +116,14 @@ async function collectPageFromTab(tabId) {
     }
   }
   throw new Error(`[${extensionVersion()} / ${stage} / 탭 ${tabId}] ${lastError?.message || lastError}`);
+}
+
+function collectPageFromTab(tabId) {
+  return sendMessageToPageCollector(tabId, { type: "COLLECT_PAGE" });
+}
+
+function getAmazonPageStateFromTab(tabId) {
+  return sendMessageToPageCollector(tabId, { type: "GET_AMAZON_PAGE_STATE" });
 }
 
 function isAmazonHostname(hostname) {
@@ -247,6 +257,19 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress, sourc
         return false;
       }
     }, signal);
+    const state = await getAmazonPageStateFromTab(tabId);
+    if (/\/ap\/signin(?:\/|$)/i.test(new URL(state?.url || "https://invalid/").pathname)) {
+      throw new Error(`Amazon 로그인 페이지로 이동했습니다: ${state.url}`);
+    }
+    if (!state?.amazon || state.amazon.pageType !== "review") {
+      throw new Error(`Amazon ${star}점 페이지 진입 확인 실패. 주소: ${state?.url || "주소 없음"}`);
+    }
+    if (state.amazon.asin.toUpperCase() !== page.amazon.asin.toUpperCase()) {
+      throw new Error(`Amazon ASIN이 다릅니다. 요청 ${page.amazon.asin}, 실제 ${state.amazon.asin}; 주소: ${state.url}`);
+    }
+    if (Number(state.amazon.currentStar) !== star) {
+      throw new Error(`Amazon 별점 페이지 진입이 다릅니다. 요청 ${star}점, 실제 ${state.amazon.currentStar}; 주소: ${state.url}`);
+    }
     const collected = await collectPageFromTab(tabId);
     if (/\/ap\/signin(?:\/|$)/i.test(new URL(collected.url).pathname)) {
       throw new Error(`Amazon ${star}점 리뷰 요청이 로그인 화면으로 이동했습니다: ${collected.url}`);
@@ -257,8 +280,12 @@ async function collectAmazonStarPage(page, filterName, signal, onProgress, sourc
     if (collected.amazon.asin.toUpperCase() !== page.amazon.asin.toUpperCase()) {
       throw new Error(`Amazon ASIN이 다릅니다. 요청 ${page.amazon.asin}, 실제 ${collected.amazon.asin}; 주소: ${collected.url}`);
     }
-    if (Number(collected.amazon.currentStar) !== star) {
-      throw new Error(`Amazon 별점 필터가 다릅니다. 요청 ${star}점, 실제 ${collected.amazon.currentStar}; 주소: ${collected.url}`);
+    const wrongRatingReview = (collected.comments || []).find((comment) => {
+      const match = String(comment).match(/^\[Amazon review \| ([1-5])\/5/m);
+      return match && Number(match[1]) !== star;
+    });
+    if (wrongRatingReview) {
+      throw new Error(`Amazon ${star}점 필터에서 다른 별점 리뷰가 수집되었습니다.`);
     }
     if (collected.amazon.expansionStoppedAtLimit) {
       throw new Error(`Amazon ${star}점 리뷰가 안전 한도보다 많아 전체 수집을 완료하지 못했습니다.`);

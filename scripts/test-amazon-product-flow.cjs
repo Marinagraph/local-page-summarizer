@@ -50,7 +50,10 @@ async function run(host, prefix) {
           return { url: renderedStarLinks[message.filterName] };
         }
         const star = ['one_star', 'two_star', 'three_star'].indexOf(new URL(reviewUrl).searchParams.get('filterByStar')) + 1;
-        return { url: reviewUrl, amazon: { asin: 'B087V5LZMH', pageType: 'review', currentStar: star },
+        if (message.type === 'GET_AMAZON_PAGE_STATE') {
+          return { url: reviewUrl, amazon: { asin: 'B087V5LZMH', pageType: 'review', currentStar: star } };
+        }
+        return { url: reviewUrl, amazon: { asin: 'B087V5LZMH', pageType: 'review', currentStar: 0 },
           comments: [`[Amazon review | ${star}/5 | R${star}]\nBody: Full original review ${star}`] };
       }
     }

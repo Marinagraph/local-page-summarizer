@@ -129,6 +129,7 @@ function collectAmazonMetadata(expansion = {}) {
     localePrefix,
     reviewBasePath,
     reviewPortalUrl,
+    url: location.href,
     filter,
     currentStar: amazonStarForFilter(filter),
     reportedRatings,
@@ -1975,10 +1976,22 @@ function collectYouTubeTranscript() {
 
 async function collectPage() {
   const selection = cleanText(String(window.getSelection ? window.getSelection() : ""));
+  const amazonInitial = isAmazonCollectionPage() ? collectAmazonMetadata() : null;
   const amazonExpansion = shouldExpandCurrentAmazonReviews() ? await expandAmazonReviews() : null;
   if (isAmazonReviewPage()) await expandAmazonReviewBodies();
   const amazonReviews = isAmazonCollectionPage() ? collectAmazonReviews() : null;
-  const amazon = collectAmazonMetadata(amazonExpansion || {});
+  const amazonFinal = isAmazonCollectionPage() ? collectAmazonMetadata(amazonExpansion || {}) : null;
+  const amazon = amazonInitial && amazonFinal
+    ? {
+      ...amazonFinal,
+      filter: amazonInitial.filter,
+      currentStar: amazonInitial.currentStar,
+      initialUrl: amazonInitial.url,
+      finalFilter: amazonFinal.filter,
+      finalCurrentStar: amazonFinal.currentStar,
+      finalUrl: amazonFinal.url
+    }
+    : amazonFinal;
   const xConversation = collectXConversation();
   const kakaku = collectKakakuMetadata();
   const kakakuBbs = collectKakakuBbsMetadata();
@@ -2075,6 +2088,9 @@ globalThis.__localPageSummarizerMessageListener = (message) => {
   }
   if (message && message.type === "GET_AMAZON_STAR_FILTER_URL") {
     return Promise.resolve({ url: amazonStarFilterUrl(String(message.filterName || "")) });
+  }
+  if (message && message.type === "GET_AMAZON_PAGE_STATE") {
+    return Promise.resolve({ url: location.href, title: document.title, amazon: collectAmazonMetadata() });
   }
 
   return false;
