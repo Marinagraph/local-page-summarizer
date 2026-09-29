@@ -12,6 +12,7 @@ const LEGACY_DEFAULT_MODELS = new Set([
 const collectButton = document.querySelector("#collectButton");
 const exportButton = document.querySelector("#exportButton");
 const resetButton = document.querySelector("#resetButton");
+const copyErrorButton = document.querySelector("#copyErrorButton");
 const modelInput = document.querySelector("#modelInput");
 const maxCharsInput = document.querySelector("#maxCharsInput");
 const lmConcurrencyInput = document.querySelector("#lmConcurrencyInput");
@@ -23,6 +24,7 @@ const pageMetaElement = document.querySelector("#pageMeta");
 
 let lastSaved = null;
 let pollTimer = null;
+let lastErrorText = "";
 const LIVE_JOB_TTL_MS = 60 * 60 * 1000;
 
 function isLiveJobState(state) {
@@ -36,6 +38,18 @@ function isLiveJobState(state) {
 
 function setStatus(message) {
   statusElement.textContent = message;
+}
+
+function clearError() {
+  lastErrorText = "";
+  copyErrorButton.hidden = true;
+}
+
+function displayError(error) {
+  lastErrorText = error && error.message ? error.message : String(error);
+  copyErrorButton.hidden = !lastErrorText;
+  summaryElement.textContent = lastErrorText || "요약 중 오류가 발생했습니다.";
+  setStatus("오류");
 }
 
 function storageKeyFor(url) {
@@ -192,6 +206,16 @@ function toMarkdown(saved) {
       `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
       `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
       `- Amazon low-star reviews: ${saved.amazonCollection.reviewCount}`,
+      ...Object.entries(saved.amazonCollection.ratingDiagnostics || {}).flatMap(([star, stats]) => [
+        `- Amazon ${star}-star cards found: ${stats.cardsFound}`,
+        `- Amazon ${star}-star ratings parsed: ${stats.ratingsParsed}`,
+        `- Amazon ${star}-star ratings unparsed: ${stats.ratingsUnparsed}`,
+        `- Amazon ${star}-star matching cards: ${stats.matchingCount}`,
+        `- Amazon ${star}-star mismatched cards ignored: ${stats.mismatchedCount}`,
+        `- Amazon ${star}-star parsed rating distribution: ${JSON.stringify(stats.ratingsByStar || {})}`,
+        `- Amazon ${star}-star review bodies missing: ${stats.bodiesMissing}`,
+        `- Amazon ${star}-star reviews saved: ${stats.reviewsSaved}`
+      ]),
       `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`,
       `- Amazon expansion stops: ${JSON.stringify(saved.amazonCollection.expansionStops || {})}`
     ] : []),
@@ -244,6 +268,9 @@ function renderMetaFromSaved(saved) {
     saved.amazonCollection
       ? `Amazon 저평점 리뷰 ${saved.amazonCollection.reviewCount.toLocaleString()}개 (1점 ${saved.amazonCollection.starCounts?.[1] || 0} / 2점 ${saved.amazonCollection.starCounts?.[2] || 0} / 3점 ${saved.amazonCollection.starCounts?.[3] || 0})`
       : "",
+    ...Object.entries(saved.amazonCollection?.ratingDiagnostics || {}).map(([star, stats]) => (
+      `Amazon ${star}점 진단: 카드 ${stats.cardsFound}, 파싱 ${stats.ratingsParsed}, 일치 ${stats.matchingCount}, 불일치 제외 ${stats.mismatchedCount}, 미파싱 ${stats.ratingsUnparsed}, 본문 누락 ${stats.bodiesMissing}, 저장 ${stats.reviewsSaved} / 별점 분포 ${JSON.stringify(stats.ratingsByStar || {})}`
+    )),
     `이미지 후보 ${(saved.images || []).length.toLocaleString()}개`,
     `OCR 결과 ${(saved.ocrResults || []).filter((result) => result.text).length.toLocaleString()}개`,
     saved.summarizerVersion ? `버전 ${saved.summarizerVersion}` : "",
@@ -252,12 +279,22 @@ function renderMetaFromSaved(saved) {
 }
 
 function renderJobState(state) {
+  if (lastErrorText) {
+    collectButton.disabled = false;
+    copyErrorButton.hidden = false;
+    setStatus("오류");
+    summaryElement.textContent = lastErrorText;
+    return;
+  }
+
   if (!state) {
     collectButton.disabled = false;
+    copyErrorButton.hidden = true;
     return;
   }
 
   if (isLiveJobState(state)) {
+    copyErrorButton.hidden = true;
     collectButton.disabled = true;
     setStatus(state.message || "요약 작업 진행 중...");
     summaryElement.textContent = [
@@ -273,6 +310,7 @@ function renderJobState(state) {
   collectButton.disabled = false;
 
   if (state.status === "done") {
+    copyErrorButton.hidden = true;
     setStatus("저장 완료: Markdown 자동 저장됨");
     summaryElement.textContent = state.summary || "요약 완료";
     if (lastSaved) {
@@ -282,12 +320,15 @@ function renderJobState(state) {
   }
 
   if (state.status === "error") {
+    lastErrorText = state.error || "요약 중 오류가 발생했습니다.";
+    copyErrorButton.hidden = false;
     setStatus("오류");
-    summaryElement.textContent = state.error || "요약 중 오류가 발생했습니다.";
+    summaryElement.textContent = lastErrorText;
     return;
   }
 
   if (state.status === "idle") {
+    copyErrorButton.hidden = true;
     setStatus("작업 상태 초기화됨");
     summaryElement.textContent = state.message || "다시 Save & Summarize를 누를 수 있습니다.";
   }
@@ -361,6 +402,7 @@ async function markStaleJob(currentState) {
 }
 
 async function startSummaryJob() {
+  clearError();
   const currentState = (await browser.storage.local.get("summaryJobState")).summaryJobState;
   if (isLiveJobState(currentState)) {
     renderJobState(currentState);
@@ -445,6 +487,7 @@ async function exportMarkdown() {
 }
 
 collectButton.addEventListener("click", async () => {
+  clearError();
   collectButton.disabled = true;
   setStatus("작업 시작 중...");
   summaryElement.textContent = "요약 작업을 원본 페이지 탭으로 넘기고 있습니다.";
@@ -452,9 +495,7 @@ collectButton.addEventListener("click", async () => {
   try {
     await startSummaryJob();
   } catch (error) {
-    collectButton.disabled = false;
-    summaryElement.textContent = error && error.message ? error.message : String(error);
-    setStatus("오류");
+    displayError(error);
   }
 });
 
@@ -466,14 +507,24 @@ exportButton.addEventListener("click", async () => {
     await exportMarkdown();
     setStatus("내보내기 완료");
   } catch (error) {
-    summaryElement.textContent = error && error.message ? error.message : String(error);
-    setStatus("오류");
+    displayError(error);
   } finally {
     exportButton.disabled = false;
   }
 });
 
+copyErrorButton.addEventListener("click", async () => {
+  if (!lastErrorText) return;
+  try {
+    await navigator.clipboard.writeText(lastErrorText);
+    setStatus("오류 내용 복사됨");
+  } catch (error) {
+    setStatus(`복사 실패: ${error && error.message ? error.message : String(error)}`);
+  }
+});
+
 resetButton.addEventListener("click", async () => {
+  clearError();
   try {
     await browser.runtime.sendMessage({ type: "RESET_SUMMARY_JOB" });
   } catch {
@@ -492,8 +543,7 @@ resetButton.addEventListener("click", async () => {
 });
 
 restoreSettings().catch((error) => {
-  summaryElement.textContent = error && error.message ? error.message : String(error);
-  setStatus("설정 복원 오류");
+  displayError(error);
 });
 
 pollTimer = setInterval(() => {

@@ -51,7 +51,7 @@ dist\
 : Firefox 확장 설정 파일입니다. 현재 Manifest V2를 사용하며, 긴 작업이 끊기지 않도록 persistent background script를 사용합니다. 확장 ID는 `local-page-summarizer@example.local`입니다.
 
 `popup.html`, `popup.css`, `popup.js`
-: Firefox 툴바 버튼을 눌렀을 때 열리는 팝업 UI입니다. 모델명, 최대 청크 크기, OCR 사용 여부, OCR endpoint를 설정하고 작업 시작/상태 표시/Markdown 내보내기를 담당합니다. 긴 요약 작업 자체는 popup에서 돌리지 않습니다.
+: Firefox 툴바 버튼을 눌렀을 때 열리는 팝업 UI입니다. 모델명, 최대 청크 크기, OCR 사용 여부, OCR endpoint를 설정하고 작업 시작/상태 표시/Markdown 내보내기를 담당합니다. 오류가 표시되면 `Copy Error`로 전체 오류 메시지를 복사할 수 있습니다. 긴 요약 작업 자체는 popup에서 돌리지 않습니다.
 
 `contentScript.js`
 : General page body extraction tries the bundled `vendor/defuddle.js` first, then falls back to the existing selector-based extractor if the Defuddle result is too short or suspiciously large. DCInside and YouTube keep their site-specific collectors.
@@ -206,7 +206,7 @@ https://image.dcinside.com/viewimagePop.php?...
 
 상품 페이지에서 `Save & Summarize`를 한 번 실행하면 됩니다. 리뷰 상세 페이지를 직접 열거나 별점별로 반복 실행할 필요가 없습니다. 확장이 같은 창과 로그인 컨테이너에 비활성 임시 탭을 만들고 수집 후 닫습니다. 컨테이너 유지를 위해 `cookies` 권한을 사용하며 쿠키 값을 읽거나 저장하지 않습니다. 임시 탭의 초기 `about:blank` 상태는 웹페이지 로딩 완료까지 기다립니다.
 
-Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/`, `/product-reviews/ASIN/` 리뷰 화면에서 실행할 수 있습니다. 상품 페이지에서 시작하면 화면의 실제 `See all reviews` 링크를 통해 리뷰 화면을 연 뒤, 리뷰 화면에 렌더링된 1점, 2점, 3점 필터 링크를 따라갑니다. 로드 직후 ASIN과 선택 별점을 검사해 보존하고, 리뷰 확장 중 URL이 변경되어도 최초 필터 상태를 유지합니다. 수집 후에는 각 리뷰 카드의 실제 별점도 확인합니다. `/-/en/`처럼 언어 경로가 앞에 붙어도 Amazon 링크를 그대로 사용합니다. 실제 전체 리뷰 링크를 찾지 못하면 임의 주소를 만들지 않고 구체적인 오류를 표시합니다. 각 별점 화면에서는 `Show 10 more reviews`를 끝까지 누르고, 카드의 `Read more`도 펼친 후 수집합니다. 완료한 임시 탭은 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
+Amazon의 상품 `/dp/ASIN` 또는 `/portal/customer-reviews/ASIN/`, `/product-reviews/ASIN/` 리뷰 화면에서 실행할 수 있습니다. 상품 페이지에서 시작하면 화면의 실제 `See all reviews` 링크를 통해 리뷰 화면을 연 뒤, 리뷰 화면에 렌더링된 1점, 2점, 3점 필터 링크를 따라갑니다. 페이지마다 현재 리뷰를 먼저 수집한 뒤 다음 페이지로 이동하며, Amazon의 다음 페이지 링크에서 필터가 빠져도 `filterByStar`, `reviewerType=all_reviews`, 페이지 번호를 복원합니다. AJAX 방식의 `Show 10 more reviews`는 한 번 누를 때마다 현재 페이지를 다시 수집합니다. 페이지 번호는 URL의 `pageNumber` 또는 Amazon의 `paging_btm_2` 같은 참조 경로에서도 판별합니다. 수집 후에는 각 리뷰 카드의 실제 별점을 확인하고, 별점 조건이 전부 불일치하면 분포와 현재 주소를 표시하며 중단합니다. `/-/en/`처럼 언어 경로가 앞에 붙어도 Amazon 링크를 그대로 사용합니다. 완료한 임시 탭은 닫습니다. 4점과 5점 리뷰는 분석 및 `Source Text` 저장 대상에서 제외됩니다.
 
 Amazon 화면의 `global ratings` 수치는 별점만 남긴 사용자까지 포함할 수 있으므로 서면 리뷰 개수와 같지 않습니다. 결과에는 Amazon이 표시한 평점 수와 실제로 수집한 1~3점 서면 리뷰 수를 별도로 기록합니다. 리뷰 포털이 로그인을 요구하는 경우 Firefox에서 Amazon에 먼저 로그인해야 합니다. 로그인 화면으로 이동하거나 안전 확장 한도에 도달해 전체 수집 여부를 확인할 수 없으면 요약을 계속하지 않고 오류로 알립니다. Amazon 상품과 리뷰 화면은 텍스트 리뷰만 수집하며 OCR 서버를 호출하지 않습니다.
 
@@ -242,7 +242,7 @@ The build script writes ZIP entries with `/` paths and maximum DEFLATE compressi
 현재 빌드 산출물 예:
 
 ```text
-dist\local-page-summarizer-0.3.50.xpi
+dist\local-page-summarizer-0.3.54.xpi
 ```
 
 ## 개발 검증
@@ -253,6 +253,8 @@ JavaScript 문법 검사:
 node --check .\background.js
 node --check .\popup.js
 node --check .\contentScript.js
+node .\scripts\test-amazon-rating-parser.cjs
+node .\scripts\test-amazon-product-flow.cjs
 ```
 
 Manifest 확인:
@@ -301,6 +303,6 @@ git diff --check
 - background script는 긴 작업, LM Studio 호출, OCR 호출, 저장을 담당합니다.
 - OCR 서버는 로컬 PC에서만 동작하며 이미지를 EasyOCR로 처리합니다.
 - OCR 서버는 GPU 전용으로 동작하며 CPU fallback을 허용하지 않습니다.
-- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, Amazon 상품 및 리뷰 페이지는 1~3점 필터의 `Show 10 more reviews`를 끝까지 확장하고, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오며, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
+- 댓글 후보는 현재 페이지 DOM에 보이는 범위 안에서 전부 분석합니다. X 게시물 페이지에서는 스크롤 중 나타난 답글을 탭 안에서 누적합니다. 단, Amazon 상품 및 리뷰 페이지는 1~3점 필터의 페이지네이션 또는 AJAX 더보기를 별점 필터를 유지하며 수집하고, `prod.danawa.com` 상품 페이지는 상품의견과 쇼핑몰 후기 API를 100개 단위로 끝까지 가져오며, `review.kakaku.com/review/K.../` 상품 리뷰 페이지는 `Page=N` 페이지네이션을 끝까지 따라가 전체 리뷰를 분석합니다.
 - 성능 최적화는 보이는 댓글을 줄이는 방식으로 하지 않습니다. 대신 작은 중간 분석 결과의 추가 병합 호출을 생략해 LM Studio 호출 수를 줄입니다.
 - LLM은 자기 학습 시점이나 사전 지식을 기준으로 원문을 가짜로 판정하지 않도록 프롬프트에서 제한합니다.
