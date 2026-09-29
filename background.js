@@ -211,9 +211,13 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
   const seen = new Set();
   const starCounts = { 1: 0, 2: 0, 3: 0 };
   let moreClicks = 0;
+  const expansionStops = {};
 
   for (const collected of collectedPages) {
     moreClicks += Number(collected.amazon?.moreClicks) || 0;
+    if (collected.amazon?.currentStar) {
+      expansionStops[collected.amazon.currentStar] = collected.amazon.expansionStopReason || "unknown";
+    }
     for (const comment of collected.comments || []) {
       const normalized = String(comment || "").trim();
       const reviewId = (normalized.match(/^\[Amazon review \| [1-3]\/5 \| ([^\]]+)\]/m) || [])[1] || "";
@@ -237,6 +241,7 @@ async function enrichPageWithAmazonReviews(page, signal, onProgress) {
       starCounts,
       filtersCollected: AMAZON_LOW_STAR_FILTERS,
       moreClicks,
+      expansionStops,
       tabsOpened: collectedPages.length - 1
     }
   };
@@ -2495,7 +2500,8 @@ function toMarkdown(saved) {
       `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
       `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
       `- Amazon low-star reviews: ${saved.amazonCollection.reviewCount}`,
-      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`
+      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`,
+      `- Amazon expansion stops: ${JSON.stringify(saved.amazonCollection.expansionStops || {})}`
     ] : []),
     `- Image candidates: ${(saved.images || []).length}`,
     `- OCR results: ${(saved.ocrResults || []).filter((result) => result.text).length}`,

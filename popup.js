@@ -192,7 +192,8 @@ function toMarkdown(saved) {
       `- Amazon 2-star reviews: ${saved.amazonCollection.starCounts?.[2] || 0}`,
       `- Amazon 3-star reviews: ${saved.amazonCollection.starCounts?.[3] || 0}`,
       `- Amazon low-star reviews: ${saved.amazonCollection.reviewCount}`,
-      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`
+      `- Amazon review expansions: ${saved.amazonCollection.moreClicks}`,
+      `- Amazon expansion stops: ${JSON.stringify(saved.amazonCollection.expansionStops || {})}`
     ] : []),
     ...(saved.ocrTiming ? [
       `- OCR timing: ${saved.ocrTiming.totalSeconds}s, workers ${saved.ocrTiming.downloadWorkers}, batch ${saved.ocrTiming.easyocrBatchSize}`

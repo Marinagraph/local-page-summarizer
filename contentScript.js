@@ -114,6 +114,7 @@ function collectAmazonMetadata(expansion = {}) {
     reportedRatings,
     reviewUrls,
     moreClicks: Number(expansion.moreClicks) || 0,
+    expansionStopReason: String(expansion.stopReason || "not_started"),
     expansionStoppedAtLimit: Boolean(expansion.stoppedAtLimit)
   };
 }
@@ -290,41 +291,66 @@ function collectAmazonReviews() {
 
 function findAmazonMoreReviewsButton() {
   const candidates = document.querySelectorAll([
-    "button[data-hook*='more-reviews' i]",
-    "a[data-hook*='more-reviews' i]",
-    "button[id*='more-reviews' i]",
-    "a[id*='more-reviews' i]",
+    "[data-hook*='more-reviews' i]",
+    "[data-action*='more-reviews' i]",
+    "[id*='more-reviews' i]",
+    "[aria-label*='more reviews' i]",
     "button",
-    "a[role='button']"
+    "a[role='button']",
+    "[role='button']",
+    "input[type='button']",
+    "input[type='submit']",
+    ".a-button"
   ].join(","));
 
   for (const candidate of candidates) {
-    const text = cleanText(candidate.textContent || candidate.getAttribute("aria-label") || "");
-    const isMoreReviews = /\b(?:show|see|load)\s+(?:\d+\s+)?more\s+reviews?\b/i.test(text);
-    const disabled = candidate.disabled || candidate.getAttribute("aria-disabled") === "true";
+    const text = cleanText([
+      candidate.textContent || "",
+      candidate.getAttribute("aria-label") || "",
+      candidate.getAttribute("title") || "",
+      candidate.value || ""
+    ].join(" "));
+    const isMoreReviews = (
+      /\b(?:show|see|load|view)\s+(?:\d+\s+)?more\s+(?:customer\s+)?reviews?\b/i.test(text) ||
+      /(?:さらに|もっと).{0,12}(?:レビュー|評価)|(?:レビュー|評価).{0,12}(?:さらに|もっと)(?:見る|表示)/i.test(text)
+    );
+    const disabled = (
+      candidate.disabled ||
+      candidate.getAttribute("aria-disabled") === "true" ||
+      candidate.classList.contains("a-button-disabled") ||
+      Boolean(candidate.closest(".a-button-disabled"))
+    );
     if (isMoreReviews && !disabled && isRenderedElement(candidate)) {
-      return candidate;
+      return candidate.matches("button, a, input, [role='button']")
+        ? candidate
+        : candidate.querySelector("button, a, input, [role='button']") || candidate;
     }
   }
 
   return null;
 }
 
-function waitForAmazonReviewGrowth(previousCount, timeoutMs = 10000) {
+function waitForAmazonReviewGrowth(previousCount, timeoutMs = 20000) {
   return new Promise((resolve) => {
     const started = Date.now();
+    let largestCount = previousCount;
+    let lastGrowthAt = 0;
     const timer = setInterval(() => {
       const currentCount = amazonReviewCards().length;
-      if (currentCount > previousCount) {
+      if (currentCount > largestCount) {
+        largestCount = currentCount;
+        lastGrowthAt = Date.now();
+      }
+      if (largestCount > previousCount && Date.now() - lastGrowthAt >= 750) {
         clearInterval(timer);
-        resolve(true);
+        resolve({ grew: true, count: largestCount });
         return;
       }
       if (Date.now() - started >= timeoutMs) {
         clearInterval(timer);
-        resolve(false);
+        resolve({ grew: largestCount > previousCount, count: largestCount });
       }
-    }, 250);
+    }, 200);
   });
 }
 
@@ -338,30 +364,38 @@ async function reportAmazonCollectionProgress(message) {
 
 async function expandAmazonReviews() {
   let moreClicks = 0;
+  let stopReason = "no_button";
 
   while (moreClicks < AMAZON_MAX_MORE_CLICKS) {
     const button = findAmazonMoreReviewsButton();
     if (!button) {
+      stopReason = "no_button";
       break;
     }
 
     const previousCount = amazonReviewCards().length;
     button.scrollIntoView({ block: "center", behavior: "auto" });
     button.click();
-    const grew = await waitForAmazonReviewGrowth(previousCount);
-    if (!grew) {
+    const growth = await waitForAmazonReviewGrowth(previousCount);
+    if (!growth.grew) {
+      stopReason = "no_growth";
       break;
     }
 
     moreClicks += 1;
     await reportAmazonCollectionProgress(
-      `Amazon ${collectAmazonMetadata()?.currentStar || "1~3"}점 리뷰 펼치는 중: ${amazonReviewCards().length.toLocaleString()}개`
+      `Amazon ${collectAmazonMetadata()?.currentStar || "1~3"}점 리뷰 자동 확장 ${moreClicks}회: ${growth.count.toLocaleString()}개`
     );
+  }
+
+  if (moreClicks >= AMAZON_MAX_MORE_CLICKS && findAmazonMoreReviewsButton()) {
+    stopReason = "limit";
   }
 
   return {
     moreClicks,
-    stoppedAtLimit: moreClicks >= AMAZON_MAX_MORE_CLICKS && Boolean(findAmazonMoreReviewsButton())
+    stopReason,
+    stoppedAtLimit: stopReason === "limit"
   };
 }
 
